@@ -454,7 +454,13 @@ def save_cookies(req: CookiesRequest):
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return """
+    resp = HTMLResponse(content=INDEX_HTML)
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+INDEX_HTML = """
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -1089,9 +1095,9 @@ def index():
             const cookieSaveMsg = document.getElementById('cookieSaveMsg');
 
             accordionToggle.addEventListener('click', () => {
-                const isOpen = accordionBody.style.display === 'block';
-                accordionBody.style.display = isOpen ? 'none' : 'block';
-                accordionIcon.innerText = isOpen ? '▼' : '▲';
+                const isCurrentlyHidden = window.getComputedStyle(accordionBody).display === 'none';
+                accordionBody.style.display = isCurrentlyHidden ? 'block' : 'none';
+                accordionIcon.innerText = isCurrentlyHidden ? '▲' : '▼';
             });
 
             // Check cookie status on load with graceful fallback
@@ -1106,6 +1112,9 @@ def index():
                     } else {
                         cookieBadge.innerText = '⚠️ No Cookies (Click to Setup)';
                         cookieBadge.className = 'cookie-status-tag tag-missing';
+                        // Auto-expand so user clearly sees the instructions and textarea
+                        accordionBody.style.display = 'block';
+                        accordionIcon.innerText = '▲';
                     }
                 } catch(e) {
                     cookieBadge.innerText = '⚠️ No Cookies (Click to Setup)';
@@ -1217,7 +1226,10 @@ def index():
                 }
             }
 
-            btnInspect.addEventListener('click', inspectVideo);
+            btnInspect.addEventListener('click', () => {
+                lastInspectedUrl = "";
+                inspectVideo();
+            });
             videoUrlInput.addEventListener('change', inspectVideo);
             videoUrlInput.addEventListener('paste', () => setTimeout(inspectVideo, 150));
             videoUrlInput.addEventListener('input', () => {
@@ -1383,7 +1395,7 @@ def index():
                         const job = await res.json();
 
                         // Update console logs
-                        consoleLogs.innerText = (job.logs || []).join("\n");
+                        consoleLogs.innerText = (job.logs || []).join(String.fromCharCode(10));
                         consoleLogs.scrollTop = consoleLogs.scrollHeight;
 
                         const total = job.total_clips || 1;
