@@ -111,24 +111,26 @@ def fetch_video_metadata(url: str) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Standard extraction attempt warning: {e}")
 
-    # Fallback to Android client extraction if unauthenticated
-    if not info or not info.get('title'):
-        try:
-            fallback_opts = {
-                'quiet': True,
-                'skip_download': True,
-                'no_warnings': True,
-                'nocheckcertificate': True,
-                'extractor_args': {'youtube': {'player_client': ['android']}}
-            }
-            if js_runtimes:
-                fallback_opts['js_runtimes'] = js_runtimes
-            if cookie_file and cookie_file.exists():
-                fallback_opts['cookiefile'] = str(cookie_file)
-            with yt_dlp.YoutubeDL(fallback_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-        except Exception as fe:
-            logger.warning(f"Fallback extraction warning: {fe}")
+    # Fallback to mobile/VR clients (WITHOUT cookies, since Android client rejects cookies and bypasses SABR)
+    if not info or not info.get('title') or not info.get('formats'):
+        for client in ['android', 'ios', 'android_vr', 'tv_embedded']:
+            try:
+                fallback_opts = {
+                    'quiet': True,
+                    'skip_download': True,
+                    'no_warnings': True,
+                    'nocheckcertificate': True,
+                    'remote_components': ['ejs:github'],
+                    'extractor_args': {'youtube': {'player_client': [client]}}
+                }
+                if js_runtimes:
+                    fallback_opts['js_runtimes'] = js_runtimes
+                with yt_dlp.YoutubeDL(fallback_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                if info and info.get('title') and any(f.get('vcodec') != 'none' for f in info.get('formats', [])):
+                    break
+            except Exception as fe:
+                logger.warning(f"Fallback extraction warning with {client}: {fe}")
 
     formats = info.get('formats', [])
     heights = sorted(list(set(f.get('height') for f in formats if f.get('height'))), reverse=True)
