@@ -2,7 +2,7 @@
 """
 ingest.py - Universal Video Ingestion Module
 Handles local file paths and YouTube URLs via yt-dlp.
-Uses mobile android player client to bypass YouTube datacenter bot detection on cloud servers (Render, AWS).
+Uses android API with player_skip=webpage to completely bypass datacenter IP blocks on Render/AWS.
 """
 
 import os
@@ -78,30 +78,44 @@ def ingest_video(
     import yt_dlp
     logger.info(f"Ingesting remote stream from: {source}")
 
-    client_candidates = [
-        ["android"],
-        ["android", "ios"],
-        ["ios"]
+    # Check for cookies file or env variable
+    cookie_file = Path("cookies.txt")
+    if not cookie_file.exists():
+        env_cookies = os.environ.get("YOUTUBE_COOKIES")
+        if env_cookies:
+            try:
+                cookie_file.write_text(env_cookies, encoding="utf-8")
+                logger.info("Loaded YouTube cookies from YOUTUBE_COOKIES environment variable.")
+            except Exception as ce:
+                logger.warning(f"Could not write cookies: {ce}")
+
+    # Extraction configs (using player_skip=webpage to avoid bot detection on datacenter IPs)
+    extractor_strategies = [
+        {"player_client": ["android"], "player_skip": ["webpage", "configs"]},
+        {"player_client": ["android"], "player_skip": ["webpage"]},
+        {"player_client": ["tv_embedded"]},
+        {"player_client": ["android", "ios"]}
     ]
 
     last_error = None
 
-    for client_list in client_candidates:
+    for strat in extractor_strategies:
         ydl_opts = {
-            "format": "bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best/18",
+            "format": "18/bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best",
             "outtmpl": str(output_path.with_suffix(".part.%(ext)s")),
             "merge_output_format": "mp4",
             "quiet": False,
             "no_warnings": True,
             "socket_timeout": 30,
             "extractor_args": {
-                "youtube": {
-                    "player_client": client_list
-                }
+                "youtube": strat
             }
         }
         if ffmpeg_dir:
             ydl_opts["ffmpeg_location"] = ffmpeg_dir
+
+        if cookie_file.exists():
+            ydl_opts["cookiefile"] = str(cookie_file)
 
         if start_time is not None and (end_time is not None or duration is not None):
             e_time = end_time if end_time is not None else (start_time + duration)
@@ -110,15 +124,15 @@ def ingest_video(
 
         for attempt in range(1, max_retries + 1):
             try:
-                logger.info(f"Attempting download with player_client={client_list} (attempt {attempt}/{max_retries})...")
+                logger.info(f"Attempting download with strat={strat} (attempt {attempt}/{max_retries})...")
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([source])
                 last_error = None
                 break
             except Exception as e:
                 last_error = e
-                logger.warning(f"Download attempt {attempt}/{max_retries} with {client_list} failed: {e}")
-                time.sleep(2 * attempt)
+                logger.warning(f"Download attempt {attempt}/{max_retries} with {strat} failed: {e}")
+                time.sleep(1.5 * attempt)
 
         if last_error is None:
             break

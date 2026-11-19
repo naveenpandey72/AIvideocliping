@@ -87,7 +87,12 @@ def fetch_video_metadata(url: str) -> Dict[str, Any]:
             'quiet': True,
             'skip_download': True,
             'no_warnings': True,
-            'extractor_args': {'youtube': {'player_client': ['android']}}
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android'],
+                    'player_skip': ['webpage', 'configs']
+                }
+            }
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
