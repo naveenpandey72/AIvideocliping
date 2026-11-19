@@ -63,6 +63,7 @@ def ingest_video(
     start_time: Optional[float] = None,
     end_time: Optional[float] = None,
     duration: Optional[float] = None,
+    quality: Optional[str] = None,
     max_retries: int = 3
 ) -> Path:
     """Ingests a video source (URL or local path) into an MP4 file."""
@@ -106,30 +107,62 @@ def ingest_video(
     logger.info(f"Ingesting remote stream from: {source}")
 
     cookie_file = find_cookie_file()
+    max_h = int(quality) if quality and quality.isdigit() else 2160
+
+    # Build format selector with clean fallbacks
+    format_spec = (
+        f"bestvideo[height<={max_h}][ext=mp4]+bestaudio[ext=m4a]/"
+        f"bestvideo[height<={max_h}]+bestaudio/"
+        f"best[height<={max_h}]/"
+        f"bestvideo+bestaudio/best"
+    )
+
+    # Detect JavaScript runtimes (node/deno) for yt-dlp signature challenge deciphering
+    js_runtimes = {}
+    if shutil.which("node") or shutil.which("nodejs") or Path("/usr/bin/node").exists():
+        js_runtimes["node"] = {}
+    if shutil.which("deno") or Path("/usr/local/bin/deno").exists() or Path("/root/.deno/bin/deno").exists():
+        js_runtimes["deno"] = {}
 
     # Extraction strategies
-    extractor_strategies = [
-        {"player_client": ["android"], "player_skip": ["webpage", "configs"]},
-        {"player_client": ["android"], "player_skip": ["webpage"]},
-        {"player_client": ["tv_embedded"]},
-        {"player_client": ["android", "ios"]},
-        {"player_client": ["web"]}
-    ]
+    if cookie_file and cookie_file.exists():
+        # With authenticated cookies, standard yt-dlp / web player extraction works best
+        extractor_strategies = [
+            None,                                    # Standard default with cookies
+            {"player_client": ["web"]},             # Explicit web client
+            {"player_client": ["web", "default"]},  # Web + default
+            {"player_client": ["android"]},         # Innertube Android
+            {"player_client": ["tv"]},              # TV client
+        ]
+    else:
+        # Without cookies, try Innertube clients that bypass datacenter IP restrictions
+        extractor_strategies = [
+            {"player_client": ["android"]},
+            {"player_client": ["android", "ios"]},
+            {"player_client": ["tv_embedded"]},
+            None
+        ]
 
     last_error = None
 
     for strat in extractor_strategies:
         ydl_opts = {
-            "format": "18/bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best",
+            "format": format_spec,
+            "format_sort": ["res", "fps", "ext:mp4:m4a"],
             "outtmpl": str(output_path.with_suffix(".part.%(ext)s")),
             "merge_output_format": "mp4",
             "quiet": False,
-            "no_warnings": True,
+            "no_warnings": False,
             "socket_timeout": 30,
-            "extractor_args": {
-                "youtube": strat
-            }
+            "nocheckcertificate": True,
+            "geo_bypass": True,
         }
+        if strat:
+            ydl_opts["extractor_args"] = {"youtube": strat}
+
+        if js_runtimes:
+            ydl_opts["js_runtimes"] = js_runtimes
+
         if ffmpeg_dir:
             ydl_opts["ffmpeg_location"] = ffmpeg_dir
 
@@ -143,18 +176,111 @@ def ingest_video(
 
         for attempt in range(1, max_retries + 1):
             try:
-                logger.info(f"Attempting download with strat={strat} (attempt {attempt}/{max_retries})...")
+                strat_name = strat if strat else "default"
+                logger.info(f"Attempting download with strat={strat_name} (attempt {attempt}/{max_retries})...")
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([source])
                 last_error = None
                 break
             except Exception as e:
                 last_error = e
-                logger.warning(f"Download attempt {attempt}/{max_retries} with {strat} failed: {e}")
+                logger.warning(f"Download attempt {attempt}/{max_retries} with {strat_name} failed: {e}")
                 time.sleep(1.5 * attempt)
 
         if last_error is None:
             break
+
+    # Check if download succeeded via download_ranges
+    if output_path.exists() and output_path.stat().st_size > 1000:
+        logger.info(f"Ingestion successful: {output_path} ({output_path.stat().st_size} bytes)")
+        return output_path
+
+    # Check for .part candidates and finalize
+    candidates = list(output_path.parent.glob(f"{output_path.stem}.part.*")) + list(output_path.parent.glob(f"{output_path.stem}*"))
+    for cand in candidates:
+        if cand != output_path and cand.stat().st_size > 1000 and cand.suffix in [".mp4", ".mkv", ".webm", ".ts"]:
+            if output_path.exists():
+                output_path.unlink()
+            cand.rename(output_path)
+            logger.info(f"Ingestion successful (from {cand.name}): {output_path} ({output_path.stat().st_size} bytes)")
+            return output_path
+
+    # FALLBACK: Direct Stream Slice via FFmpeg if yt-dlp download_ranges had issues
+    logger.info("Attempting FFmpeg direct stream URL slice fallback...")
+    try:
+        extract_opts = {
+            "quiet": True,
+            "skip_download": True,
+            "nocheckcertificate": True,
+        }
+        if js_runtimes:
+            extract_opts["js_runtimes"] = js_runtimes
+        if cookie_file and cookie_file.exists():
+            extract_opts["cookiefile"] = str(cookie_file)
+
+        with yt_dlp.YoutubeDL(extract_opts) as ydl:
+            meta = ydl.extract_info(source, download=False)
+
+        formats = meta.get("formats", [])
+        # Find best video and audio stream URLs
+        v_url = None
+        a_url = None
+        combined_url = None
+
+        for f in reversed(formats):
+            if f.get("url") and f.get("vcodec") != "none" and f.get("acodec") != "none":
+                combined_url = f.get("url")
+                break
+
+        for f in reversed(formats):
+            if f.get("url") and f.get("vcodec") != "none" and f.get("acodec") == "none":
+                if not v_url and (f.get("height") or 0) <= max_h:
+                    v_url = f.get("url")
+            if f.get("url") and f.get("vcodec") == "none" and f.get("acodec") != "none":
+                if not a_url:
+                    a_url = f.get("url")
+
+        import subprocess
+        ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+
+        if combined_url:
+            cmd = [ffmpeg_bin, "-y", "-hide_banner", "-loglevel", "error"]
+            if start_time is not None:
+                cmd.extend(["-ss", str(start_time)])
+            if end_time is not None:
+                cmd.extend(["-to", str(end_time)])
+            elif duration is not None:
+                cmd.extend(["-t", str(duration)])
+            cmd.extend([
+                "-i", combined_url,
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                "-c:a", "aac", "-b:a", "192k",
+                str(output_path)
+            ])
+            subprocess.run(cmd, check=True)
+        elif v_url and a_url:
+            cmd = [ffmpeg_bin, "-y", "-hide_banner", "-loglevel", "error"]
+            if start_time is not None:
+                cmd.extend(["-ss", str(start_time)])
+            if end_time is not None:
+                cmd.extend(["-to", str(end_time)])
+            elif duration is not None:
+                cmd.extend(["-t", str(duration)])
+            cmd.extend([
+                "-i", v_url,
+                "-i", a_url,
+                "-map", "0:v:0", "-map", "1:a:0",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                "-c:a", "aac", "-b:a", "192k",
+                str(output_path)
+            ])
+            subprocess.run(cmd, check=True)
+
+        if output_path.exists() and output_path.stat().st_size > 1000:
+            logger.info(f"FFmpeg direct stream fallback successful: {output_path} ({output_path.stat().st_size} bytes)")
+            return output_path
+    except Exception as fe:
+        logger.warning(f"FFmpeg direct stream fallback error: {fe}")
 
     if last_error is not None:
         raise RuntimeError(
@@ -162,21 +288,7 @@ def ingest_video(
             f"TIP: Cloud servers (Render/AWS) require YouTube cookies. Add cookies.txt via the web UI or Render Secret Files."
         )
 
-    # Locate and rename the output file
-    candidates = list(output_path.parent.glob(f"{output_path.stem}.part.*"))
-    if not candidates:
-        if output_path.exists():
-            return output_path
-        raise FileNotFoundError(f"Failed to find downloaded file for {source}")
-
-    downloaded = candidates[0]
-    if downloaded != output_path:
-        if output_path.exists():
-            output_path.unlink()
-        downloaded.rename(output_path)
-
-    logger.info(f"Ingestion successful: {output_path} ({output_path.stat().st_size} bytes)")
-    return output_path
+    raise FileNotFoundError(f"Failed to find downloaded file for {source}")
 
 def parse_time(val: Optional[str]) -> Optional[float]:
     if not val:
@@ -198,6 +310,7 @@ if __name__ == "__main__":
     parser.add_argument("--start", "-s", help="Start timestamp in seconds or HH:MM:SS")
     parser.add_argument("--end", "-e", help="End timestamp in seconds or HH:MM:SS")
     parser.add_argument("--duration", "-d", type=float, help="Duration in seconds")
+    parser.add_argument("--quality", "-q", default="2160", help="Maximum video resolution height (e.g. 2160, 1080, 720)")
 
     args = parser.parse_args()
 
@@ -209,6 +322,7 @@ if __name__ == "__main__":
         output_path=Path(args.output),
         start_time=s_time,
         end_time=e_time,
-        duration=args.duration
+        duration=args.duration,
+        quality=args.quality
     )
     print(f"SUCCESS: {out}")

@@ -87,33 +87,48 @@ def fetch_video_metadata(url: str) -> Dict[str, Any]:
     info = None
     cookie_file = find_cookie_file()
 
+    js_runtimes = {}
+    if shutil.which("node") or shutil.which("nodejs") or Path("/usr/bin/node").exists():
+        js_runtimes["node"] = {}
+    if shutil.which("deno") or Path("/usr/local/bin/deno").exists() or Path("/root/.deno/bin/deno").exists():
+        js_runtimes["deno"] = {}
+
+    # Primary extraction: Standard with cookies if available
     try:
         ydl_opts = {
             'quiet': True,
             'skip_download': True,
             'no_warnings': True,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android'],
-                    'player_skip': ['webpage', 'configs']
-                }
-            }
+            'nocheckcertificate': True
         }
+        if js_runtimes:
+            ydl_opts['js_runtimes'] = js_runtimes
         if cookie_file and cookie_file.exists():
             ydl_opts['cookiefile'] = str(cookie_file)
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception as e:
-        logger.warning(f"Extraction attempt warning: {e}")
+        logger.warning(f"Standard extraction attempt warning: {e}")
 
-    # Fallback to standard extraction
+    # Fallback to Android client extraction if unauthenticated
     if not info or not info.get('title'):
-        fallback_opts = {'quiet': True, 'skip_download': True, 'no_warnings': True}
-        if cookie_file and cookie_file.exists():
-            fallback_opts['cookiefile'] = str(cookie_file)
-        with yt_dlp.YoutubeDL(fallback_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        try:
+            fallback_opts = {
+                'quiet': True,
+                'skip_download': True,
+                'no_warnings': True,
+                'nocheckcertificate': True,
+                'extractor_args': {'youtube': {'player_client': ['android']}}
+            }
+            if js_runtimes:
+                fallback_opts['js_runtimes'] = js_runtimes
+            if cookie_file and cookie_file.exists():
+                fallback_opts['cookiefile'] = str(cookie_file)
+            with yt_dlp.YoutubeDL(fallback_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as fe:
+            logger.warning(f"Fallback extraction warning: {fe}")
 
     formats = info.get('formats', [])
     heights = sorted(list(set(f.get('height') for f in formats if f.get('height'))), reverse=True)
@@ -264,7 +279,8 @@ def execute_multi_clip_job(job_id: str, req: ClipRequest):
                 output_filename=clip_name,
                 start_time=str(seg["start"]),
                 end_time=str(seg["end"]),
-                force_pillarbox=pillarbox
+                force_pillarbox=pillarbox,
+                quality=req.video_quality
             )
 
             clip_data = {

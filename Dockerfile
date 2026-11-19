@@ -23,9 +23,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cabextract \
     xfonts-utils \
+    unzip \
     && wget https://www.freedesktop.org/software/fontconfig/webfonts/webfonts.tar.gz -O /tmp/webfonts.tar.gz || true \
     && rm -rf /var/lib/apt/lists/* || true \
     && fc-cache -f -v
+
+# Ensure node and deno JS runtimes are available in PATH for yt-dlp cipher deciphering
+RUN (which node || ln -s $(which nodejs) /usr/local/bin/node || true) \
+    && (curl -fsSL https://deno.land/install.sh | sh || true) \
+    && (test -f /root/.deno/bin/deno && cp /root/.deno/bin/deno /usr/local/bin/deno || true)
 
 WORKDIR /app
 

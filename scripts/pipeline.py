@@ -43,7 +43,8 @@ def run_job(
     end_time: Optional[str] = None,
     duration: Optional[float] = None,
     model_name: str = "base",
-    force_pillarbox: bool = False
+    force_pillarbox: bool = False,
+    quality: Optional[str] = "2160"
 ) -> Path:
     """Executes the full pipeline for a designated clip segment."""
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
@@ -73,6 +74,8 @@ def run_job(
         ingest_cmd.extend(["--end", str(end_time)])
     elif duration:
         ingest_cmd.extend(["--duration", str(duration)])
+    if quality:
+        ingest_cmd.extend(["--quality", str(quality)])
     run_step(ingest_cmd, "Step 1/4: Ingesting Media")
 
     # 2. Transcribe
@@ -131,6 +134,7 @@ if __name__ == "__main__":
     parser.add_argument("--duration", type=float, help="Clip duration in seconds")
     parser.add_argument("--model", default="base", help="Whisper model (tiny, base, small)")
     parser.add_argument("--pillarbox", action="store_true", help="Force blurred pillarbox layout")
+    parser.add_argument("--quality", default="2160", help="Max quality height (e.g. 2160, 1080)")
     args = parser.parse_args()
 
     run_job(
@@ -140,5 +144,6 @@ if __name__ == "__main__":
         end_time=args.end,
         duration=args.duration,
         model_name=args.model,
-        force_pillarbox=args.pillarbox
+        force_pillarbox=args.pillarbox,
+        quality=args.quality
     )
