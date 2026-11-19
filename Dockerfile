@@ -4,9 +4,10 @@ FROM python:3.11-slim
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# Install FFmpeg with libass support, font utilities, and OpenCV dependencies
+# Install FFmpeg with libass support, NodeJS (for yt-dlp JS challenge deciphering), and font/OpenCV dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    nodejs \
     fontconfig \
     fonts-freefont-ttf \
     fonts-liberation \

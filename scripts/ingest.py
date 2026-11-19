@@ -2,7 +2,7 @@
 """
 ingest.py - Universal Video Ingestion Module
 Handles local file paths and YouTube URLs via yt-dlp.
-Merges best video (up to 1080p) + best audio into an MP4 container with robust retry logic.
+Uses mobile android player client to bypass YouTube datacenter bot detection on cloud servers (Render, AWS).
 """
 
 import os
@@ -78,41 +78,57 @@ def ingest_video(
     import yt_dlp
     logger.info(f"Ingesting remote stream from: {source}")
 
-    ydl_opts = {
-        "format": "bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best",
-        "outtmpl": str(output_path.with_suffix(".part.%(ext)s")),
-        "merge_output_format": "mp4",
-        "quiet": False,
-        "no_warnings": True,
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android", "web"]
+    client_candidates = [
+        ["android"],
+        ["android", "ios"],
+        ["ios"]
+    ]
+
+    last_error = None
+
+    for client_list in client_candidates:
+        ydl_opts = {
+            "format": "bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best/18",
+            "outtmpl": str(output_path.with_suffix(".part.%(ext)s")),
+            "merge_output_format": "mp4",
+            "quiet": False,
+            "no_warnings": True,
+            "socket_timeout": 30,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": client_list
+                }
             }
         }
-    }
-    if ffmpeg_dir:
-        ydl_opts["ffmpeg_location"] = ffmpeg_dir
+        if ffmpeg_dir:
+            ydl_opts["ffmpeg_location"] = ffmpeg_dir
 
-    if start_time is not None and (end_time is not None or duration is not None):
-        e_time = end_time if end_time is not None else (start_time + duration)
-        ydl_opts["download_ranges"] = yt_dlp.utils.download_range_func([], [[start_time, e_time]])
-        ydl_opts["force_keyframes_at_cuts"] = True
+        if start_time is not None and (end_time is not None or duration is not None):
+            e_time = end_time if end_time is not None else (start_time + duration)
+            ydl_opts["download_ranges"] = yt_dlp.utils.download_range_func([], [[start_time, e_time]])
+            ydl_opts["force_keyframes_at_cuts"] = True
 
-    for attempt in range(1, max_retries + 1):
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([source])
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(f"Attempting download with player_client={client_list} (attempt {attempt}/{max_retries})...")
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([source])
+                last_error = None
+                break
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Download attempt {attempt}/{max_retries} with {client_list} failed: {e}")
+                time.sleep(2 * attempt)
+
+        if last_error is None:
             break
-        except Exception as e:
-            logger.warning(f"Download attempt {attempt}/{max_retries} failed: {e}")
-            if attempt == max_retries:
-                raise
-            time.sleep(2 * attempt)
+
+    if last_error is not None:
+        raise RuntimeError(f"All download attempts failed for {source}: {last_error}")
 
     # Locate and rename the output file
     candidates = list(output_path.parent.glob(f"{output_path.stem}.part.*"))
     if not candidates:
-        # Check if direct mp4 was created
         if output_path.exists():
             return output_path
         raise FileNotFoundError(f"Failed to find downloaded file for {source}")
@@ -141,20 +157,22 @@ def parse_time(val: Optional[str]) -> Optional[float]:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ingest video from URL or local file")
-    parser.add_argument("--input", "-i", required=True, help="Video URL or local file path")
-    parser.add_argument("--output", "-o", default="./temp_work/source.mp4", help="Output MP4 path")
-    parser.add_argument("--start", help="Start time (seconds or HH:MM:SS)")
-    parser.add_argument("--end", help="End time (seconds or HH:MM:SS)")
-    parser.add_argument("--duration", type=float, help="Duration in seconds")
+    parser.add_argument("--input", "-i", required=True, help="Source URL or local file path")
+    parser.add_argument("--output", "-o", required=True, help="Destination MP4 file path")
+    parser.add_argument("--start", "-s", help="Start timestamp in seconds or HH:MM:SS")
+    parser.add_argument("--end", "-e", help="End timestamp in seconds or HH:MM:SS")
+    parser.add_argument("--duration", "-d", type=float, help="Duration in seconds")
+
     args = parser.parse_args()
 
-    s = parse_time(args.start)
-    e = parse_time(args.end)
+    s_time = parse_time(args.start)
+    e_time = parse_time(args.end)
+
     out = ingest_video(
         source=args.input,
         output_path=Path(args.output),
-        start_time=s,
-        end_time=e,
+        start_time=s_time,
+        end_time=e_time,
         duration=args.duration
     )
     print(f"SUCCESS: {out}")

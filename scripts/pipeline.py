@@ -26,6 +26,16 @@ TEMP_DIR = BASE_DIR / "temp_work"
 FINAL_DIR = BASE_DIR / "final_clips"
 SCRIPTS_DIR = BASE_DIR / "scripts"
 
+def run_step(cmd: list, step_name: str):
+    logger.info(f"--- {step_name} ---")
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        err_msg = f"{step_name} failed (code {proc.returncode}):\n{proc.stderr.strip() or proc.stdout.strip()}"
+        logger.error(err_msg)
+        raise RuntimeError(err_msg)
+    if proc.stdout:
+        logger.info(proc.stdout.strip().splitlines()[-1])
+
 def run_job(
     source_input: str,
     output_filename: str = "viral_short.mp4",
@@ -52,7 +62,6 @@ def run_job(
     logger.info("==================================================")
 
     # 1. Ingest
-    logger.info("--- Step 1/4: Ingesting Media ---")
     ingest_cmd = [
         python_bin, str(SCRIPTS_DIR / "ingest.py"),
         "--input", source_input,
@@ -64,20 +73,18 @@ def run_job(
         ingest_cmd.extend(["--end", str(end_time)])
     elif duration:
         ingest_cmd.extend(["--duration", str(duration)])
-    subprocess.run(ingest_cmd, check=True)
+    run_step(ingest_cmd, "Step 1/4: Ingesting Media")
 
     # 2. Transcribe
-    logger.info("--- Step 2/4: Transcribing Audio with Word Timestamps ---")
     transcribe_cmd = [
         python_bin, str(SCRIPTS_DIR / "transcribe.py"),
         "--input", str(slice_path),
         "--output", str(transcript_path),
         "--model", model_name
     ]
-    subprocess.run(transcribe_cmd, check=True)
+    run_step(transcribe_cmd, "Step 2/4: Transcribing Audio with Word Timestamps")
 
     # 3. Smart Crop to 1080x1920
-    logger.info("--- Step 3/4: MediaPipe AI Face Tracking & 9:16 Cropping ---")
     crop_cmd = [
         python_bin, str(SCRIPTS_DIR / "smart_crop.py"),
         "--input", str(slice_path),
@@ -85,17 +92,16 @@ def run_job(
     ]
     if force_pillarbox:
         crop_cmd.append("--pillarbox")
-    subprocess.run(crop_cmd, check=True)
+    run_step(crop_cmd, "Step 3/4: MediaPipe AI Face Tracking & 9:16 Cropping")
 
     # 4. Render Captions
-    logger.info("--- Step 4/4: Burning Viral Karaoke Captions ---")
     caption_cmd = [
         python_bin, str(SCRIPTS_DIR / "render_captions.py"),
         "--video", str(cropped_path),
         "--transcript", str(transcript_path),
         "--output", str(final_output)
     ]
-    subprocess.run(caption_cmd, check=True)
+    run_step(caption_cmd, "Step 4/4: Burning Viral Karaoke Captions")
 
     # 5. Verification
     if not final_output.exists() or final_output.stat().st_size == 0:
