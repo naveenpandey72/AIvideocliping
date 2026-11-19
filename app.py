@@ -3,6 +3,7 @@ import sys
 import time
 import uuid
 import json
+import shutil
 import logging
 import asyncio
 from pathlib import Path
