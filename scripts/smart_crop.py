@@ -36,20 +36,42 @@ def ensure_ffmpeg():
     return ffmpeg_cmd or "ffmpeg"
 
 class FaceTracker:
-    """Robust face tracker using OpenCV Haar Cascade with MediaPipe task support."""
+    """Robust face tracker using OpenCV Haar Cascade with graceful fallback."""
     def __init__(self):
-        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        self.cascade = cv2.CascadeClassifier(cascade_path)
+        self.cascade = None
+        try:
+            if hasattr(cv2, "CascadeClassifier"):
+                cascade_dir = getattr(getattr(cv2, "data", None), "haarcascades", "")
+                cascade_file = os.path.join(cascade_dir, "haarcascade_frontalface_default.xml") if cascade_dir else ""
+                if cascade_file and os.path.exists(cascade_file):
+                    self.cascade = cv2.CascadeClassifier(cascade_file)
+                else:
+                    for p in [
+                        "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
+                        "/usr/share/opencv/haarcascades/haarcascade_frontalface_default.xml",
+                        "haarcascade_frontalface_default.xml"
+                    ]:
+                        if os.path.exists(p):
+                            self.cascade = cv2.CascadeClassifier(p)
+                            break
+            if self.cascade is None:
+                logger.warning("Haar cascade face detector not found. Using center-focused subject tracking.")
+        except Exception as e:
+            logger.warning(f"Could not load Haar cascade face detector: {e}. Using center-focused tracking.")
 
     def detect_face_center(self, bgr_frame: np.ndarray) -> Optional[float]:
         """Returns the X center of the primary detected face, or None."""
-        gray = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2GRAY)
-        faces = self.cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30))
-        if len(faces) > 0:
-            # Pick largest face
-            largest = max(faces, key=lambda f: f[2] * f[3])
-            x, y, w, h = largest
-            return float(x + w / 2.0)
+        if self.cascade is None:
+            return None
+        try:
+            gray = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2GRAY)
+            faces = self.cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30))
+            if len(faces) > 0:
+                largest = max(faces, key=lambda f: f[2] * f[3])
+                x, y, w, h = largest
+                return float(x + w / 2.0)
+        except Exception:
+            pass
         return None
 
 def smart_crop_video(
