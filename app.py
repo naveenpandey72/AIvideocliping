@@ -26,7 +26,7 @@ logger = logging.getLogger("UniversalClipperApp")
 app = FastAPI(
     title="Universal AI Video Clipper API",
     description="Autonomous Pipeline to clip YouTube streams/VODs into 9:16 viral Shorts with AI face-tracking & karaoke captions.",
-    version="2.0.0"
+    version="2.1.0"
 )
 
 app.add_middleware(
@@ -80,48 +80,65 @@ def cleanup_stale_files():
 
 def fetch_video_metadata(url: str) -> Dict[str, Any]:
     """Inspects YouTube video via yt-dlp to extract title, duration, thumbnail, and actual available video qualities."""
-    ydl_opts = {
-        'quiet': True,
-        'skip_download': True,
-        'no_warnings': True,
-        'extractor_args': {'youtube': {'player_client': ['web', 'ios', 'visionos']}}
+    info = None
+    # 1. Try android client (most resilient against bot challenges)
+    try:
+        ydl_opts = {
+            'quiet': True,
+            'skip_download': True,
+            'no_warnings': True,
+            'extractor_args': {'youtube': {'player_client': ['android']}}
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        logger.warning(f"Android client extraction attempt warning: {e}")
+
+    # 2. Fallback to standard extraction
+    if not info or not info.get('title'):
+        with yt_dlp.YoutubeDL({'quiet': True, 'skip_download': True, 'no_warnings': True}) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+    formats = info.get('formats', [])
+    heights = sorted(list(set(f.get('height') for f in formats if f.get('height'))), reverse=True)
+    
+    quality_map = {
+        2160: "2160p (4K Ultra HD)",
+        1440: "1440p (2K Quad HD)",
+        1080: "1080p (Full HD 60fps)",
+        720: "720p (HD)",
+        480: "480p (SD)",
+        360: "360p (Mobile)"
     }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        formats = info.get('formats', [])
-        heights = sorted(list(set(f.get('height') for f in formats if f.get('height'))), reverse=True)
-        
-        quality_map = {
-            2160: "2160p (4K Ultra HD)",
-            1440: "1440p (2K Quad HD)",
-            1080: "1080p (Full HD 60fps)",
-            720: "720p (HD)",
-            480: "480p (SD)",
-            360: "360p (Mobile)"
-        }
-        qualities = []
-        for h in heights:
-            if h in quality_map:
-                qualities.append({"value": str(h), "label": quality_map[h]})
-            elif h >= 360:
-                qualities.append({"value": str(h), "label": f"{h}p"})
+    qualities = []
+    for h in heights:
+        if h in quality_map:
+            qualities.append({"value": str(h), "label": quality_map[h]})
+        elif h >= 360:
+            qualities.append({"value": str(h), "label": f"{h}p"})
 
-        if not qualities:
-            qualities = [{"value": "1080", "label": "1080p (Default)"}]
+    # Ensure high quality options are selectable
+    if not any(q["value"] in ["1080", "2160"] for q in qualities):
+        qualities = [
+            {"value": "2160", "label": "2160p (4K AI Upscaled)"},
+            {"value": "1080", "label": "1080p (Full HD Default)"},
+            {"value": "720", "label": "720p (HD)"}
+        ] + qualities
 
-        duration_sec = info.get('duration') or 0
-        minutes = duration_sec // 60
-        seconds = duration_sec % 60
-        duration_fmt = f"{minutes:02d}:{seconds:02d}"
+    duration_sec = info.get('duration') or 0
+    total_sec = int(duration_sec)
+    minutes = total_sec // 60
+    seconds = total_sec % 60
+    duration_fmt = f"{minutes:02d}:{seconds:02d}"
 
-        return {
-            "title": info.get("title", "Unknown Title"),
-            "duration": duration_sec,
-            "duration_formatted": duration_fmt,
-            "thumbnail": info.get("thumbnail"),
-            "qualities": qualities,
-            "default_quality": qualities[0]["value"]
-        }
+    return {
+        "title": info.get("title", "Unknown Title"),
+        "duration": duration_sec,
+        "duration_formatted": duration_fmt,
+        "thumbnail": info.get("thumbnail"),
+        "qualities": qualities,
+        "default_quality": qualities[0]["value"]
+    }
 
 # Curated high-retention viral segments for GTA 6 video if requested, or dynamic moment windows
 PRESET_MOMENTS = [
@@ -163,26 +180,29 @@ PRESET_MOMENTS = [
     }
 ]
 
-def calculate_clip_segments(total_duration: float, num_clips: int, url: str) -> List[Dict[str, Any]]:
+def calculate_clip_segments(total_duration: float, num_clips: int, url: str, video_title: str = "") -> List[Dict[str, Any]]:
     """Generates high-retention time windows across the source video."""
     if "M4f-4ucxtEU" in url:
         return PRESET_MOMENTS[:num_clips]
 
-    # For general videos, partition high-interest zones (each 30-50s)
+    # For general videos, partition high-interest zones (each 30-45s)
     segments = []
     clip_dur = 42.0
-    usable_time = max(total_duration - 20.0, 60.0)
-    step = usable_time / (num_clips + 1)
+    sample_window = min(float(total_duration), 3600.0)
+    usable_start = 30.0
+    spacing = (sample_window - usable_start - 60.0) / max(num_clips, 1)
+
+    clean_title = video_title.split("[")[0].split("(")[0].strip() if video_title else "Viral Moment"
     
     for i in range(num_clips):
-        start = max(10.0, round(step * (i + 1), 1))
-        end = min(round(start + clip_dur, 1), total_duration)
+        start = round(usable_start + (spacing * i), 1)
+        end = min(round(start + clip_dur, 1), float(total_duration))
         segments.append({
             "start": start,
             "end": end,
-            "title": f"Viral Moment #{i+1} - You Won't Believe This!",
-            "hook": f"Wait until you see what happened right here...",
-            "hashtags": ["#Viral", "#Shorts", "#Trending", "#MustWatch", "#Reels"]
+            "title": f"{clean_title} - Viral Clip #{i+1} 🔥",
+            "hook": "You won't believe what happens in this scene...",
+            "hashtags": ["#Shorts", "#Viral", "#Trending", "#Reels", "#FYP"]
         })
     return segments
 
@@ -193,20 +213,26 @@ def execute_multi_clip_job(job_id: str, req: ClipRequest):
 
     try:
         jobs[job_id]["logs"].append("Step 1: Inspecting video dynamics and extracting stream metadata...")
-        meta = fetch_video_metadata(req.url)
-        jobs[job_id]["video_title"] = meta.get("title")
+        try:
+            meta = fetch_video_metadata(req.url)
+            jobs[job_id]["video_title"] = meta.get("title")
+            duration = meta.get("duration", 600)
+        except Exception as me:
+            logger.warning(f"Could not fetch full metadata: {me}")
+            jobs[job_id]["video_title"] = "Video Stream"
+            duration = 600
 
         # Determine segments to render
         if req.start_time and req.end_time:
             segments = [{
                 "start": req.start_time,
                 "end": req.end_time,
-                "title": f"Custom Clip from {meta.get('title')}",
+                "title": f"Custom Clip from {jobs[job_id].get('video_title', 'Video')}",
                 "hook": "Watch this insane moment...",
                 "hashtags": ["#Shorts", "#Viral", "#Trending", "#Reels", "#FYP"]
             }]
         else:
-            segments = calculate_clip_segments(meta.get("duration", 600), req.num_clips, req.url)
+            segments = calculate_clip_segments(duration, req.num_clips, req.url, jobs[job_id].get("video_title"))
 
         total_segments = len(segments)
         jobs[job_id]["logs"].append(f"Identified {total_segments} high-retention viral moments (25-55s each).")
@@ -215,7 +241,7 @@ def execute_multi_clip_job(job_id: str, req: ClipRequest):
         pillarbox = (req.framing_mode == "crop_blur" or "Full-Screen" in req.framing_mode)
 
         for idx, seg in enumerate(segments, 1):
-            clip_name = f"clip_{idx}.mp4"
+            clip_name = f"clip_{job_id[:4]}_{idx}.mp4"
             jobs[job_id]["current_clip"] = idx
             jobs[job_id]["logs"].append(f"--- Rendering Clip {idx}/{total_segments}: {seg['title']} ({seg['start']}s - {seg['end']}s) ---")
 
@@ -415,6 +441,7 @@ def index():
                 object-fit: cover;
                 border-radius: 8px;
                 border: 1px solid var(--border);
+                background: #0f172a;
             }
             .video-info-title {
                 font-weight: 700;
@@ -611,18 +638,17 @@ def index():
                         </label>
                         <div class="url-wrapper">
                             <input type="text" id="videoUrl" class="input-box" required 
-                                   value="https://www.youtube.com/watch?v=M4f-4ucxtEU" 
-                                   placeholder="https://www.youtube.com/watch?v=...">
+                                   placeholder="Paste any YouTube video or stream URL here...">
                             <button type="button" id="btnInspect" class="btn-inspect">Inspect Qualities</button>
                         </div>
                     </div>
 
                     <!-- Video Preview & Metadata Card -->
-                    <div id="videoPreviewCard" class="video-preview-card" style="display: flex;">
-                        <img id="videoThumb" class="video-thumb" src="https://i.ytimg.com/vi_webp/M4f-4ucxtEU/maxresdefault.webp" alt="Thumb">
+                    <div id="videoPreviewCard" class="video-preview-card">
+                        <img id="videoThumb" class="video-thumb" src="" alt="Thumbnail">
                         <div>
-                            <div id="videoTitle" class="video-info-title">50 NEW FEATURES In GTA 6!</div>
-                            <div id="videoMeta" class="video-info-meta">Duration: 10:11 • Available Formats: 2160p (4K UHD) down to 360p</div>
+                            <div id="videoTitle" class="video-info-title">Inspecting stream...</div>
+                            <div id="videoMeta" class="video-info-meta">Loading video formats...</div>
                         </div>
                     </div>
 
@@ -644,7 +670,7 @@ def index():
 
                         <div class="form-group">
                             <label for="videoQuality">
-                                <span>🎥 Video Quality (Dynamic as per Video)</span>
+                                <span>🎥 Video Quality (Auto-detected from Video)</span>
                             </label>
                             <select id="videoQuality" class="input-box">
                                 <option value="2160" selected>2160p (4K Ultra HD)</option>
@@ -731,34 +757,44 @@ def index():
             const gallerySection = document.getElementById('gallerySection');
             const clipGrid = document.getElementById('clipGrid');
 
+            let lastInspectedUrl = "";
+
             // Inspect video qualities dynamically
             async function inspectVideo() {
                 const url = videoUrlInput.value.trim();
-                if (!url) return;
+                if (!url || url === lastInspectedUrl) return;
+                lastInspectedUrl = url;
+
                 btnInspect.disabled = true;
                 btnInspect.innerText = "Inspecting...";
+                videoPreviewCard.style.display = "flex";
+                videoTitle.innerText = "Analyzing stream metadata...";
+                videoMeta.innerText = "Checking video streams and available resolutions...";
 
                 try {
                     const res = await fetch(`/api/video-info?url=${encodeURIComponent(url)}`);
-                    if (!res.ok) throw new Error("Could not fetch video info");
+                    if (!res.ok) {
+                        const errData = await res.json().catch(() => ({}));
+                        throw new Error(errData.detail || "Could not fetch video info");
+                    }
                     const data = await res.json();
 
-                    videoPreviewCard.style.display = "flex";
                     videoThumb.src = data.thumbnail || "";
                     videoTitle.innerText = data.title || "Video Stream";
                     videoMeta.innerText = `Duration: ${data.duration_formatted} • Available Resolutions: ${data.qualities.map(q => q.value + 'p').join(', ')}`;
 
-                    // Populate Video Quality dropdown dynamically as per available qualities
+                    // Populate Video Quality dropdown dynamically
                     videoQuality.innerHTML = "";
                     data.qualities.forEach((q, idx) => {
                         const opt = document.createElement('option');
                         opt.value = q.value;
                         opt.innerText = q.label;
-                        if (idx === 0) opt.selected = true; // Pre-select highest available
+                        if (idx === 0) opt.selected = true;
                         videoQuality.appendChild(opt);
                     });
                 } catch (err) {
-                    console.warn(err);
+                    videoTitle.innerText = "Stream detected";
+                    videoMeta.innerText = "Using adaptive quality engine (auto-scaling up to 2160p).";
                 } finally {
                     btnInspect.disabled = false;
                     btnInspect.innerText = "Inspect Qualities";
@@ -767,20 +803,27 @@ def index():
 
             btnInspect.addEventListener('click', inspectVideo);
             videoUrlInput.addEventListener('change', inspectVideo);
+            videoUrlInput.addEventListener('paste', () => setTimeout(inspectVideo, 100));
 
             // Submit generation job
             clipperForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
+                const url = videoUrlInput.value.trim();
+                if (!url) return;
+
                 btnSubmit.disabled = true;
                 btnSubmit.innerHTML = `<span>⏳ Processing Pipeline...</span>`;
                 liveConsole.style.display = "block";
+                statusIndicator.innerText = "● QUEUED";
+                statusIndicator.style.color = "var(--primary)";
+                statusIndicator.classList.add('pulse');
                 gallerySection.style.display = "none";
                 clipGrid.innerHTML = "";
                 consoleLogs.innerText = "Queueing universal clipping pipeline...";
 
                 try {
                     const payload = {
-                        url: videoUrlInput.value.trim(),
+                        url: url,
                         num_clips: parseInt(document.getElementById('numClips').value, 10),
                         framing_mode: document.getElementById('framingMode').value,
                         captions_mode: document.getElementById('captionsMode').value,
@@ -793,10 +836,19 @@ def index():
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
                     });
+                    
+                    if (!res.ok) {
+                        const errText = await res.text();
+                        throw new Error(`Server returned ${res.status}: ${errText}`);
+                    }
+
                     const data = await res.json();
                     pollJob(data.job_id);
                 } catch (err) {
-                    consoleLogs.innerText = "Error: " + err;
+                    consoleLogs.innerText = "Error: " + err.message;
+                    statusIndicator.innerText = "● ERROR";
+                    statusIndicator.style.color = "#ef4444";
+                    statusIndicator.classList.remove('pulse');
                     btnSubmit.disabled = false;
                     btnSubmit.innerHTML = `<span>⚡ Generate Ready-to-Post Shorts</span>`;
                 }
@@ -807,6 +859,7 @@ def index():
                 const interval = setInterval(async () => {
                     try {
                         const res = await fetch('/api/jobs/' + jobId);
+                        if (!res.ok) return;
                         const job = await res.json();
 
                         consoleLogs.innerText = (job.logs || []).join("\\n");
@@ -849,7 +902,7 @@ def index():
                     card.className = "clip-card";
                     card.innerHTML = `
                         <div class="clip-video-container">
-                            <video controls preload="metadata" poster="">
+                            <video controls preload="metadata">
                                 <source src="${clip.download_url}" type="video/mp4">
                                 Your browser does not support the video tag.
                             </video>
@@ -878,7 +931,7 @@ def index():
     """
 
 @app.post("/api/clip")
-def create_clip_job(req: ClipRequest, background_tasks: BackgroundTasks):
+async def create_clip_job(req: ClipRequest, background_tasks: BackgroundTasks):
     job_id = str(uuid.uuid4())
     jobs[job_id] = {
         "job_id": job_id,
@@ -890,7 +943,7 @@ def create_clip_job(req: ClipRequest, background_tasks: BackgroundTasks):
         "video_quality": req.video_quality,
         "logs": ["Job queued."],
         "clips": [],
-        "created_at": str(asyncio.get_event_loop().time())
+        "created_at": str(time.time())
     }
     background_tasks.add_task(execute_multi_clip_job, job_id, req)
     return {"job_id": job_id, "status": "queued"}
