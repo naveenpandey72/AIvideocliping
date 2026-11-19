@@ -148,27 +148,24 @@ def fetch_video_metadata(url: str) -> Dict[str, Any]:
         except Exception as oe:
             logger.warning(f"Fast oEmbed lookup notice: {oe}")
 
-    # 2. Fast yt-dlp inspection with strict 4s socket timeout
+    # 2. Fast yt-dlp inspection (only if cookies are present; otherwise oEmbed already has title & thumbnail in 200ms)
     info = None
     cookie_file = find_cookie_file()
-    try:
-        ydl_opts = {
-            'quiet': True,
-            'skip_download': True,
-            'no_warnings': True,
-            'socket_timeout': 4,
-            'retries': 1,
-            'nocheckcertificate': True
-        }
-        if cookie_file and cookie_file.exists():
-            ydl_opts['cookiefile'] = str(cookie_file)
-        else:
-            ydl_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-    except Exception as ye:
-        logger.warning(f"yt-dlp quick probe notice: {ye}")
+    if cookie_file and cookie_file.exists():
+        try:
+            ydl_opts = {
+                'quiet': True,
+                'skip_download': True,
+                'no_warnings': True,
+                'socket_timeout': 3,
+                'retries': 0,
+                'cookiefile': str(cookie_file),
+                'nocheckcertificate': True
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as ye:
+            logger.warning(f"yt-dlp quick probe notice: {ye}")
 
     # 3. Assemble metadata & qualities
     heights = []
