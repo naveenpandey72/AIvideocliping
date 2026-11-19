@@ -6,6 +6,8 @@ import json
 import shutil
 import logging
 import asyncio
+import threading
+import urllib.request
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Query
@@ -29,7 +31,7 @@ logger = logging.getLogger("UniversalClipperApp")
 app = FastAPI(
     title="Universal AI Video Clipper API",
     description="Autonomous Pipeline to clip YouTube streams/VODs into 9:16 viral Shorts with AI face-tracking & karaoke captions.",
-    version="2.2.0"
+    version="2.3.0"
 )
 
 app.add_middleware(
@@ -47,6 +49,45 @@ FINAL_DIR = BASE_DIR / "final_clips"
 FINAL_DIR.mkdir(parents=True, exist_ok=True)
 TEMP_DIR = BASE_DIR / "temp_work"
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+def start_keep_alive_worker():
+    """Background daemon thread to self-ping and prevent Render from sleeping."""
+    def _runner():
+        port = os.environ.get("PORT", "8000")
+        render_url = os.environ.get("RENDER_EXTERNAL_URL")
+        urls = [f"http://127.0.0.1:{port}/api/healthz"]
+        if render_url:
+            urls.append(f"{render_url.rstrip('/')}/api/healthz")
+        
+        while True:
+            try:
+                time.sleep(240)  # Ping every 4 minutes (Render sleep threshold is 15 minutes)
+                for u in urls:
+                    try:
+                        req = urllib.request.Request(u, headers={"User-Agent": "RenderKeepAlive/1.0"})
+                        with urllib.request.urlopen(req, timeout=10) as resp:
+                            pass
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    logger.info("Render keep-alive background worker started.")
+
+@app.on_event("startup")
+def on_startup():
+    start_keep_alive_worker()
+
+@app.get("/api/healthz")
+def health_check():
+    active = [j["job_id"] for j in jobs.values() if j.get("status") == "processing"]
+    return {
+        "status": "ok",
+        "active_jobs": len(active),
+        "total_jobs": len(jobs),
+        "timestamp": time.time()
+    }
 
 class ClipRequest(BaseModel):
     url: str
@@ -256,6 +297,7 @@ def calculate_clip_segments(total_duration: float, num_clips: int, url: str, vid
 def execute_multi_clip_job(job_id: str, req: ClipRequest):
     jobs[job_id]["status"] = "processing"
     jobs[job_id]["clips"] = []
+    jobs[job_id]["current_step"] = "Inspecting stream dynamics & metadata..."
     cleanup_stale_files()
 
     try:
@@ -276,7 +318,9 @@ def execute_multi_clip_job(job_id: str, req: ClipRequest):
                 "end": req.end_time,
                 "title": f"Custom Clip from {jobs[job_id].get('video_title', 'Video')}",
                 "hook": "Watch this insane moment...",
-                "hashtags": ["#Shorts", "#Viral", "#Trending", "#Reels", "#FYP"]
+                "hashtags": ["#Shorts", "#Viral", "#Trending", "#Reels", "#FYP"],
+                "score": 95.0,
+                "detection_source": "User Timestamp Window"
             }]
         else:
             segments = calculate_clip_segments(duration, req.num_clips, req.url, jobs[job_id].get("video_title"))
@@ -284,12 +328,33 @@ def execute_multi_clip_job(job_id: str, req: ClipRequest):
         total_segments = len(segments)
         jobs[job_id]["logs"].append(f"Identified {total_segments} high-retention viral moments (25-55s each).")
         jobs[job_id]["total_clips"] = total_segments
+        jobs[job_id]["current_clip"] = 1
+
+        # Populate the live queue so the UI immediately shows all upcoming clips!
+        jobs[job_id]["queue"] = [
+            {
+                "index": i,
+                "title": seg["title"],
+                "start": seg["start"],
+                "end": seg["end"],
+                "duration": round(float(seg["end"]) - float(seg["start"]), 1) if isinstance(seg["start"], (int, float)) else "35-50s",
+                "score": seg.get("score", 92.0),
+                "status": "queued",
+                "current_step": "Waiting in line...",
+                "download_url": None,
+                "file_size": None
+            }
+            for i, seg in enumerate(segments, 1)
+        ]
 
         pillarbox = (req.framing_mode == "crop_blur" or "Full-Screen" in req.framing_mode)
 
         for idx, seg in enumerate(segments, 1):
             clip_name = f"clip_{job_id[:4]}_{idx}.mp4"
             jobs[job_id]["current_clip"] = idx
+            jobs[job_id]["queue"][idx - 1]["status"] = "processing"
+            jobs[job_id]["queue"][idx - 1]["current_step"] = "Rendering 9:16 Shorts with AI Tracking & Captions..."
+            jobs[job_id]["current_step"] = f"Rendering Clip {idx}/{total_segments}: {seg['title']}"
             jobs[job_id]["logs"].append(f"--- Rendering Clip {idx}/{total_segments}: {seg['title']} ({seg['start']}s - {seg['end']}s) ---")
 
             out_path = run_job(
@@ -327,16 +392,27 @@ def execute_multi_clip_job(job_id: str, req: ClipRequest):
                     clip_data["gdrive"] = {"success": False, "error": str(ge)}
 
             jobs[job_id]["clips"].append(clip_data)
+            jobs[job_id]["queue"][idx - 1]["status"] = "completed"
+            jobs[job_id]["queue"][idx - 1]["current_step"] = "Ready to download!"
+            jobs[job_id]["queue"][idx - 1]["download_url"] = f"/api/clips/{clip_name}"
+            jobs[job_id]["queue"][idx - 1]["file_size"] = out_path.stat().st_size
             jobs[job_id]["logs"].append(f"✅ Clip {idx} completed: {clip_name} ({round(out_path.stat().st_size / 1e6, 2)} MB).")
 
         jobs[job_id]["status"] = "completed"
+        jobs[job_id]["current_step"] = "All clips completed and ready!"
         jobs[job_id]["logs"].append(f"🎉 All {total_segments} viral 9:16 Shorts successfully rendered at 1080x1920 @ 60 FPS!")
 
     except Exception as e:
         logger.error(f"Multi-clip job {job_id} failed: {e}", exc_info=True)
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
+        jobs[job_id]["current_step"] = f"Failed: {str(e)}"
         jobs[job_id]["logs"].append(f"❌ ERROR: {str(e)}")
+        if "queue" in jobs[job_id]:
+            for item in jobs[job_id]["queue"]:
+                if item["status"] == "processing":
+                    item["status"] = "failed"
+                    item["current_step"] = "Failed"
 
 @app.get("/api/video-info")
 def get_video_info(url: str = Query(..., description="YouTube video URL")):
@@ -738,6 +814,45 @@ def index():
             }
             .tag-active { background: rgba(34, 197, 94, 0.15); color: var(--accent-green); border: 1px solid rgba(34, 197, 94, 0.3); }
             .tag-missing { background: rgba(234, 179, 8, 0.15); color: var(--accent-yellow); border: 1px solid rgba(234, 179, 8, 0.3); }
+            .status-tag {
+                font-size: 0.72rem;
+                padding: 0.22rem 0.55rem;
+                border-radius: 6px;
+                font-weight: 700;
+                white-space: nowrap;
+            }
+            .status-done {
+                background: rgba(34, 197, 94, 0.15);
+                color: var(--accent-green);
+                border: 1px solid rgba(34, 197, 94, 0.35);
+            }
+            .status-processing {
+                background: rgba(234, 179, 8, 0.15);
+                color: var(--accent-yellow);
+                border: 1px solid rgba(234, 179, 8, 0.35);
+            }
+            .status-queued {
+                background: rgba(148, 163, 184, 0.12);
+                color: #94a3b8;
+                border: 1px solid rgba(148, 163, 184, 0.25);
+            }
+            .queue-download-btn {
+                padding: 0.45rem 0.9rem;
+                background: var(--primary);
+                color: #090d16;
+                border-radius: 6px;
+                text-decoration: none;
+                font-weight: 800;
+                font-size: 0.78rem;
+                transition: 0.2s;
+                display: inline-flex;
+                align-items: center;
+                gap: 0.35rem;
+            }
+            .queue-download-btn:hover {
+                background: #38bdf8;
+                transform: translateY(-1px);
+            }
             .pulse {
                 animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
             }
@@ -867,6 +982,27 @@ def index():
                     </button>
                 </form>
 
+                <!-- Live Generation Queue & Status Cards -->
+                <div id="queueSection" style="display: none; margin-top: 1.5rem; background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.85rem; flex-wrap: wrap; gap: 0.5rem;">
+                        <div style="display: flex; align-items: center; gap: 0.6rem;">
+                            <span style="font-weight: 800; font-size: 1.05rem; color: #fff;">📋 Generation Queue & Clip Status</span>
+                            <span id="queueProgressBadge" style="font-size: 0.75rem; padding: 2px 8px; border-radius: 999px; background: rgba(14,165,233,0.15); color: var(--primary); font-weight: 700;">0/0 Ready</span>
+                        </div>
+                        <div id="liveStepIndicator" style="font-size: 0.82rem; color: #94a3b8; font-style: italic;">Starting pipeline in background...</div>
+                    </div>
+                    
+                    <!-- Progress Bar -->
+                    <div style="width: 100%; height: 7px; background: rgba(255,255,255,0.08); border-radius: 999px; overflow: hidden; margin-bottom: 1rem;">
+                        <div id="progressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--primary), var(--accent-green)); transition: width 0.4s ease;"></div>
+                    </div>
+
+                    <!-- Queue List Items -->
+                    <div id="queueList" style="display: flex; flex-direction: column; gap: 0.65rem;">
+                        <!-- Injected dynamically -->
+                    </div>
+                </div>
+
                 <!-- Live Status & Logs -->
                 <div id="liveConsole" class="live-console">
                     <div class="console-header">
@@ -908,6 +1044,11 @@ def index():
             const clipCounter = document.getElementById('clipCounter');
             const gallerySection = document.getElementById('gallerySection');
             const clipGrid = document.getElementById('clipGrid');
+            const queueSection = document.getElementById('queueSection');
+            const queueList = document.getElementById('queueList');
+            const queueProgressBadge = document.getElementById('queueProgressBadge');
+            const liveStepIndicator = document.getElementById('liveStepIndicator');
+            const progressBar = document.getElementById('progressBar');
 
             // Accordion toggle
             const accordionToggle = document.getElementById('accordionToggle');
@@ -1064,42 +1205,172 @@ def index():
                 }
             });
 
-            async function pollJob(jobId) {
+            let completedSoundPlayed = false;
+
+            function playSuccessChime() {
+                try {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    if (!AudioContext) return;
+                    const ctx = new AudioContext();
+                    const now = ctx.currentTime;
+                    const freqs = [523.25, 659.25, 783.99, 1046.50];
+                    freqs.forEach((freq, idx) => {
+                        const osc = ctx.createOscillator();
+                        const gain = ctx.createGain();
+                        osc.type = "sine";
+                        osc.frequency.setValueAtTime(freq, now + idx * 0.12);
+                        gain.gain.setValueAtTime(0.18, now + idx * 0.12);
+                        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.12 + 0.35);
+                        osc.connect(gain);
+                        gain.connect(ctx.destination);
+                        osc.start(now + idx * 0.12);
+                        osc.stop(now + idx * 0.12 + 0.35);
+                    });
+                } catch(e) {}
+            }
+
+            function renderQueueList(queueItems, clips) {
+                if (!queueItems || queueItems.length === 0) return;
+                queueSection.style.display = "block";
+                queueList.innerHTML = "";
+
+                queueItems.forEach(item => {
+                    const row = document.createElement('div');
+                    
+                    let tagHtml = "";
+                    let actionHtml = "";
+                    let bgStyle = "background: var(--bg); border: 1px solid var(--border);";
+
+                    if (item.status === 'completed' && item.download_url) {
+                        tagHtml = `<span class="status-tag status-done">✅ Ready</span>`;
+                        actionHtml = `
+                            <a href="${item.download_url}" download="clip_${item.index}.mp4" class="queue-download-btn">
+                                <span>⬇️ Download MP4</span>
+                            </a>
+                        `;
+                        bgStyle = "background: rgba(34, 197, 94, 0.04); border: 1px solid rgba(34, 197, 94, 0.25);";
+                    } else if (item.status === 'processing') {
+                        tagHtml = `<span class="status-tag status-processing pulse">⏳ Processing</span>`;
+                        actionHtml = `<span style="font-size: 0.8rem; color: var(--accent-yellow); font-style: italic;">In Progress...</span>`;
+                        bgStyle = "background: rgba(234, 179, 8, 0.05); border: 1px solid rgba(234, 179, 8, 0.3);";
+                    } else if (item.status === 'failed') {
+                        tagHtml = `<span class="status-tag" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3);">❌ Failed</span>`;
+                        actionHtml = `<span style="font-size: 0.8rem; color: #ef4444;">Error</span>`;
+                    } else {
+                        tagHtml = `<span class="status-tag status-queued">🕒 Queued</span>`;
+                        actionHtml = `<span style="font-size: 0.8rem; color: #64748b;">Waiting...</span>`;
+                        bgStyle = "background: var(--bg); border: 1px solid var(--border); opacity: 0.7;";
+                    }
+
+                    row.setAttribute("style", `display: flex; justify-content: space-between; align-items: center; padding: 0.85rem 1.1rem; border-radius: 8px; transition: 0.2s; ${bgStyle}`);
+                    row.innerHTML = `
+                        <div style="display: flex; align-items: center; gap: 0.85rem; overflow: hidden;">
+                            ${tagHtml}
+                            <div style="overflow: hidden;">
+                                <div style="font-weight: 700; font-size: 0.9rem; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                    Queue #${item.index}: ${item.title}
+                                </div>
+                                <div style="font-size: 0.75rem; color: #94a3b8; display: flex; gap: 0.6rem; align-items: center; margin-top: 2px;">
+                                    <span>⏱️ ${item.duration}s</span>
+                                    <span>🔥 Score: ${item.score || 90}/100</span>
+                                    <span>• ${item.current_step || 'Waiting in line'}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div style="margin-left: 1rem; flex-shrink: 0;">
+                            ${actionHtml}
+                        </div>
+                    `;
+                    queueList.appendChild(row);
+                });
+            }
+
+            async function pollJob(jobId, fromStorage = false) {
+                localStorage.setItem('active_clipper_job_id', jobId);
                 currentJobText.innerText = "ID: " + jobId.slice(0, 8);
+                liveConsole.style.display = "block";
+                queueSection.style.display = "block";
+
+                // Request desktop notification permission if supported
+                if ("Notification" in window && Notification.permission === "default") {
+                    Notification.requestPermission();
+                }
+
                 const interval = setInterval(async () => {
                     try {
                         const res = await fetch('/api/jobs/' + jobId);
-                        if (!res.ok) return;
+                        if (!res.ok) {
+                            if (res.status === 404) {
+                                clearInterval(interval);
+                                localStorage.removeItem('active_clipper_job_id');
+                            }
+                            return;
+                        }
                         const job = await res.json();
 
-                        consoleLogs.innerText = (job.logs || []).join("\\n");
+                        // Update console logs
+                        consoleLogs.innerText = (job.logs || []).join("\n");
                         consoleLogs.scrollTop = consoleLogs.scrollHeight;
 
-                        if (job.total_clips) {
-                            clipCounter.innerText = `Clip ${job.current_clip || 1}/${job.total_clips}`;
+                        const total = job.total_clips || 1;
+                        const completedClips = job.clips || [];
+                        const completedCount = completedClips.length;
+                        const current = job.current_clip || 1;
+
+                        clipCounter.innerText = `Clip ${current}/${total}`;
+                        queueProgressBadge.innerText = `${completedCount}/${total} Ready`;
+                        liveStepIndicator.innerText = job.current_step || "Processing in background...";
+
+                        // Update progress bar
+                        let pct = 5;
+                        if (job.status === 'completed') {
+                            pct = 100;
+                        } else if (total > 0) {
+                            pct = Math.min(95, Math.round((completedCount / total) * 100) + 8);
+                        }
+                        progressBar.style.width = pct + '%';
+
+                        // Render live queue items with download buttons
+                        renderQueueList(job.queue || [], completedClips);
+
+                        // Render completed clips in gallery immediately so user can watch/download!
+                        if (completedCount > 0) {
+                            renderClipsGallery(completedClips);
                         }
 
                         if (job.status === 'completed') {
                             clearInterval(interval);
-                            statusIndicator.innerText = "● COMPLETED";
+                            statusIndicator.innerText = `● COMPLETED (${total}/${total} READY)`;
                             statusIndicator.style.color = "var(--accent-green)";
                             statusIndicator.classList.remove('pulse');
+                            liveStepIndicator.innerText = "🎉 All clips successfully rendered & ready!";
+                            progressBar.style.width = "100%";
                             btnSubmit.disabled = false;
                             btnSubmit.innerHTML = `<span>⚡ Generate More Shorts</span>`;
 
-                            renderClipsGallery(job.clips || []);
+                            if (!completedSoundPlayed) {
+                                completedSoundPlayed = true;
+                                playSuccessChime();
+                                if ("Notification" in window && Notification.permission === "granted") {
+                                    new Notification("🎉 Shorts Generation Complete!", {
+                                        body: `All ${total} viral 9:16 Shorts are rendered and ready!`,
+                                        icon: "https://aivideocliping.onrender.com/favicon.ico"
+                                    });
+                                }
+                            }
                         } else if (job.status === 'failed') {
                             clearInterval(interval);
                             statusIndicator.innerText = "● FAILED";
                             statusIndicator.style.color = "#ef4444";
                             statusIndicator.classList.remove('pulse');
+                            liveStepIndicator.innerText = "❌ Pipeline error: " + (job.error || "Failed");
                             btnSubmit.disabled = false;
                             btnSubmit.innerHTML = `<span>⚡ Retry Clipping</span>`;
                         }
                     } catch (err) {
                         console.error(err);
                     }
-                }, 3000);
+                }, 2500);
             }
 
             function renderClipsGallery(clips) {
@@ -1136,6 +1407,14 @@ def index():
                     clipGrid.appendChild(card);
                 });
             }
+
+            // Restore active job if user refreshed or navigated back
+            window.addEventListener('DOMContentLoaded', () => {
+                const savedJobId = localStorage.getItem('active_clipper_job_id');
+                if (savedJobId) {
+                    pollJob(savedJobId, true);
+                }
+            });
         </script>
     </body>
     </html>
@@ -1152,8 +1431,12 @@ async def create_clip_job(req: ClipRequest, background_tasks: BackgroundTasks):
         "framing_mode": req.framing_mode,
         "captions_mode": req.captions_mode,
         "video_quality": req.video_quality,
+        "current_step": "Job queued in backend worker...",
+        "queue": [],
         "logs": ["Job queued."],
         "clips": [],
+        "total_clips": req.num_clips,
+        "current_clip": 0,
         "created_at": str(time.time())
     }
     background_tasks.add_task(execute_multi_clip_job, job_id, req)
