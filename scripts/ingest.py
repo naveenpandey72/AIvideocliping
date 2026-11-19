@@ -2,7 +2,7 @@
 """
 ingest.py - Universal Video Ingestion Module
 Handles local file paths and YouTube URLs via yt-dlp.
-Uses android API with player_skip=webpage to completely bypass datacenter IP blocks on Render/AWS.
+Supports cookies from /etc/secrets/cookies.txt, local cookies.txt, and YOUTUBE_COOKIES env var.
 """
 
 import os
@@ -29,6 +29,33 @@ def ensure_ffmpeg():
                     os.environ["PATH"] = str(p) + os.pathsep + os.environ.get("PATH", "")
                     return str(p)
     return str(Path(ffmpeg_cmd).parent) if ffmpeg_cmd else ""
+
+def find_cookie_file() -> Optional[Path]:
+    """Finds cookies.txt across standard locations (Render Secret Files, local app dir, env var)."""
+    candidates = [
+        Path("/etc/secrets/cookies.txt"),
+        Path("cookies.txt"),
+        Path("/app/cookies.txt"),
+        Path(__file__).resolve().parent.parent / "cookies.txt"
+    ]
+    for c in candidates:
+        if c.exists() and c.stat().st_size > 0:
+            logger.info(f"Using cookie file: {c}")
+            return c
+
+    # Check env var
+    env_cookies = os.environ.get("YOUTUBE_COOKIES")
+    if env_cookies and len(env_cookies.strip()) > 10:
+        target = Path("/tmp/cookies.txt") if os.name != "nt" else Path("temp_work/cookies.txt")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            target.write_text(env_cookies.strip(), encoding="utf-8")
+            logger.info(f"Loaded cookies from YOUTUBE_COOKIES env var into {target}")
+            return target
+        except Exception as e:
+            logger.warning(f"Could not write cookies from env var: {e}")
+
+    return None
 
 def ingest_video(
     source: str,
@@ -78,23 +105,15 @@ def ingest_video(
     import yt_dlp
     logger.info(f"Ingesting remote stream from: {source}")
 
-    # Check for cookies file or env variable
-    cookie_file = Path("cookies.txt")
-    if not cookie_file.exists():
-        env_cookies = os.environ.get("YOUTUBE_COOKIES")
-        if env_cookies:
-            try:
-                cookie_file.write_text(env_cookies, encoding="utf-8")
-                logger.info("Loaded YouTube cookies from YOUTUBE_COOKIES environment variable.")
-            except Exception as ce:
-                logger.warning(f"Could not write cookies: {ce}")
+    cookie_file = find_cookie_file()
 
-    # Extraction configs (using player_skip=webpage to avoid bot detection on datacenter IPs)
+    # Extraction strategies
     extractor_strategies = [
         {"player_client": ["android"], "player_skip": ["webpage", "configs"]},
         {"player_client": ["android"], "player_skip": ["webpage"]},
         {"player_client": ["tv_embedded"]},
-        {"player_client": ["android", "ios"]}
+        {"player_client": ["android", "ios"]},
+        {"player_client": ["web"]}
     ]
 
     last_error = None
@@ -114,7 +133,7 @@ def ingest_video(
         if ffmpeg_dir:
             ydl_opts["ffmpeg_location"] = ffmpeg_dir
 
-        if cookie_file.exists():
+        if cookie_file and cookie_file.exists():
             ydl_opts["cookiefile"] = str(cookie_file)
 
         if start_time is not None and (end_time is not None or duration is not None):
@@ -138,7 +157,10 @@ def ingest_video(
             break
 
     if last_error is not None:
-        raise RuntimeError(f"All download attempts failed for {source}: {last_error}")
+        raise RuntimeError(
+            f"All download attempts failed for {source}: {last_error}\n"
+            f"TIP: Cloud servers (Render/AWS) require YouTube cookies. Add cookies.txt via the web UI or Render Secret Files."
+        )
 
     # Locate and rename the output file
     candidates = list(output_path.parent.glob(f"{output_path.stem}.part.*"))

@@ -19,6 +19,7 @@ sys.path.insert(0, str(BASE_DIR))
 
 from scripts.pipeline import run_job
 from scripts.gdrive_upload import upload_file_to_drive
+from scripts.ingest import find_cookie_file
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("UniversalClipperApp")
@@ -26,7 +27,7 @@ logger = logging.getLogger("UniversalClipperApp")
 app = FastAPI(
     title="Universal AI Video Clipper API",
     description="Autonomous Pipeline to clip YouTube streams/VODs into 9:16 viral Shorts with AI face-tracking & karaoke captions.",
-    version="2.1.0"
+    version="2.2.0"
 )
 
 app.add_middleware(
@@ -57,6 +58,9 @@ class ClipRequest(BaseModel):
     upload_to_gdrive: bool = False
     gdrive_folder_id: Optional[str] = None
 
+class CookiesRequest(BaseModel):
+    cookies_text: str
+
 def auto_delete_file(file_path: Path):
     """Deletes a rendered file from server disk after client download to preserve 0 MB storage."""
     try:
@@ -81,7 +85,8 @@ def cleanup_stale_files():
 def fetch_video_metadata(url: str) -> Dict[str, Any]:
     """Inspects YouTube video via yt-dlp to extract title, duration, thumbnail, and actual available video qualities."""
     info = None
-    # 1. Try android client (most resilient against bot challenges)
+    cookie_file = find_cookie_file()
+
     try:
         ydl_opts = {
             'quiet': True,
@@ -94,14 +99,20 @@ def fetch_video_metadata(url: str) -> Dict[str, Any]:
                 }
             }
         }
+        if cookie_file and cookie_file.exists():
+            ydl_opts['cookiefile'] = str(cookie_file)
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception as e:
-        logger.warning(f"Android client extraction attempt warning: {e}")
+        logger.warning(f"Extraction attempt warning: {e}")
 
-    # 2. Fallback to standard extraction
+    # Fallback to standard extraction
     if not info or not info.get('title'):
-        with yt_dlp.YoutubeDL({'quiet': True, 'skip_download': True, 'no_warnings': True}) as ydl:
+        fallback_opts = {'quiet': True, 'skip_download': True, 'no_warnings': True}
+        if cookie_file and cookie_file.exists():
+            fallback_opts['cookiefile'] = str(cookie_file)
+        with yt_dlp.YoutubeDL(fallback_opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
     formats = info.get('formats', [])
@@ -122,7 +133,6 @@ def fetch_video_metadata(url: str) -> Dict[str, Any]:
         elif h >= 360:
             qualities.append({"value": str(h), "label": f"{h}p"})
 
-    # Ensure high quality options are selectable
     if not any(q["value"] in ["1080", "2160"] for q in qualities):
         qualities = [
             {"value": "2160", "label": "2160p (4K AI Upscaled)"},
@@ -190,7 +200,6 @@ def calculate_clip_segments(total_duration: float, num_clips: int, url: str, vid
     if "M4f-4ucxtEU" in url:
         return PRESET_MOMENTS[:num_clips]
 
-    # For general videos, partition high-interest zones (each 30-45s)
     segments = []
     clip_dur = 42.0
     sample_window = min(float(total_duration), 3600.0)
@@ -302,6 +311,29 @@ def get_video_info(url: str = Query(..., description="YouTube video URL")):
         logger.error(f"Failed to fetch video info for {url}: {e}")
         raise HTTPException(status_code=400, detail=f"Could not inspect video: {str(e)}")
 
+@app.get("/api/cookie-status")
+def get_cookie_status():
+    c = find_cookie_file()
+    return {
+        "has_cookies": c is not None,
+        "path": str(c) if c else None
+    }
+
+@app.post("/api/save-cookies")
+def save_cookies(req: CookiesRequest):
+    text = req.cookies_text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Cookies content cannot be empty")
+    
+    # Target path
+    target = Path("/app/cookies.txt")
+    if not target.parent.exists():
+        target = Path("cookies.txt")
+    
+    target.write_text(text, encoding="utf-8")
+    logger.info(f"Cookies saved to {target} ({len(text)} bytes)")
+    return {"success": True, "message": "Cookies saved successfully! YouTube cloud bot-detection is now bypassed."}
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     return """
@@ -379,7 +411,7 @@ def index():
                 border-radius: 16px;
                 padding: 2rem;
                 box-shadow: 0 20px 40px rgba(0,0,0,0.4);
-                margin-bottom: 2rem;
+                margin-bottom: 1.5rem;
             }
             .form-group {
                 margin-bottom: 1.4rem;
@@ -617,6 +649,59 @@ def index():
                 background: #0284c7;
                 color: #fff;
             }
+            .accordion {
+                background: var(--surface-card);
+                border: 1px solid var(--border);
+                border-radius: 12px;
+                margin-bottom: 1.5rem;
+                overflow: hidden;
+            }
+            .accordion-header {
+                padding: 1rem 1.25rem;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                cursor: pointer;
+                font-weight: 700;
+                font-size: 0.95rem;
+                user-select: none;
+            }
+            .accordion-content {
+                display: none;
+                padding: 0 1.25rem 1.25rem;
+                border-top: 1px solid var(--border);
+                background: rgba(0,0,0,0.15);
+            }
+            .cookie-textarea {
+                width: 100%;
+                height: 100px;
+                background: var(--bg);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                color: #cbd5e1;
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 0.8rem;
+                padding: 0.75rem;
+                box-sizing: border-box;
+                margin: 0.75rem 0;
+            }
+            .cookie-btn {
+                padding: 0.6rem 1.25rem;
+                background: var(--accent-green);
+                color: #090d16;
+                border: none;
+                border-radius: 6px;
+                font-weight: 700;
+                cursor: pointer;
+            }
+            .cookie-status-tag {
+                font-size: 0.75rem;
+                padding: 0.25rem 0.6rem;
+                border-radius: 999px;
+                font-weight: 700;
+            }
+            .tag-active { background: rgba(34, 197, 94, 0.15); color: var(--accent-green); border: 1px solid rgba(34, 197, 94, 0.3); }
+            .tag-missing { background: rgba(234, 179, 8, 0.15); color: var(--accent-yellow); border: 1px solid rgba(234, 179, 8, 0.3); }
             .pulse {
                 animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
             }
@@ -632,6 +717,32 @@ def index():
                 <div class="badge-chip">⚡ Autonomous Video Engine</div>
                 <h1>Universal AI Video Clipper</h1>
                 <p class="subtitle">Extract high-retention 9:16 vertical Shorts from YouTube VODs & livestreams with AI face-tracking and Hormozi karaoke subtitles.</p>
+            </div>
+
+            <!-- Cookie Authentication Panel (Critical for Cloud Servers like Render) -->
+            <div class="accordion">
+                <div class="accordion-header" id="accordionToggle">
+                    <div style="display: flex; align-items: center; gap: 0.6rem;">
+                        <span>🍪 Cloud Server Authentication (YouTube Cookies)</span>
+                        <span id="cookieBadge" class="cookie-status-tag tag-missing">Checking...</span>
+                    </div>
+                    <span id="accordionIcon" style="color: var(--text-muted);">▼</span>
+                </div>
+                <div class="accordion-content" id="accordionBody">
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 1rem;">
+                        <b>Why this is needed:</b> Commercial cloud hosts (like Render/AWS) are blocked by YouTube with <i>"Sign in to confirm you're not a bot"</i>. Pasting your browser's YouTube cookies bypasses this 100%.
+                    </p>
+                    <ol style="font-size: 0.82rem; color: #cbd5e1; padding-left: 1.25rem; line-height: 1.6;">
+                        <li>Install free extension <b>Get cookies.txt locally</b> (Chrome/Edge/Firefox).</li>
+                        <li>Open <a href="https://www.youtube.com" target="_blank" style="color: var(--primary);">youtube.com</a> in your browser.</li>
+                        <li>Click the extension icon, copy the exported text, and paste it below:</li>
+                    </ol>
+                    <textarea id="cookiesInput" class="cookie-textarea" placeholder="# Netscape HTTP Cookie File&#10;.youtube.com&#9;TRUE&#9;/&#9;TRUE&#9;1795100000&#9;..."></textarea>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <button type="button" id="btnSaveCookies" class="cookie-btn">Save Cookies to Server</button>
+                        <span id="cookieSaveMsg" style="font-size: 0.82rem;"></span>
+                    </div>
+                </div>
             </div>
 
             <div class="card">
@@ -762,6 +873,65 @@ def index():
             const gallerySection = document.getElementById('gallerySection');
             const clipGrid = document.getElementById('clipGrid');
 
+            // Accordion toggle
+            const accordionToggle = document.getElementById('accordionToggle');
+            const accordionBody = document.getElementById('accordionBody');
+            const accordionIcon = document.getElementById('accordionIcon');
+            const cookieBadge = document.getElementById('cookieBadge');
+            const btnSaveCookies = document.getElementById('btnSaveCookies');
+            const cookiesInput = document.getElementById('cookiesInput');
+            const cookieSaveMsg = document.getElementById('cookieSaveMsg');
+
+            accordionToggle.addEventListener('click', () => {
+                const isOpen = accordionBody.style.display === 'block';
+                accordionBody.style.display = isOpen ? 'none' : 'block';
+                accordionIcon.innerText = isOpen ? '▼' : '▲';
+            });
+
+            // Check cookie status on load
+            async function checkCookies() {
+                try {
+                    const res = await fetch('/api/cookie-status');
+                    const data = await res.json();
+                    if (data.has_cookies) {
+                        cookieBadge.innerText = '● Cookies Active';
+                        cookieBadge.className = 'cookie-status-tag tag-active';
+                    } else {
+                        cookieBadge.innerText = '⚠️ No Cookies (Click to Setup)';
+                        cookieBadge.className = 'cookie-status-tag tag-missing';
+                    }
+                } catch(e) {}
+            }
+            checkCookies();
+
+            // Save cookies
+            btnSaveCookies.addEventListener('click', async () => {
+                const text = cookiesInput.value.trim();
+                if (!text) return;
+                btnSaveCookies.disabled = true;
+                btnSaveCookies.innerText = "Saving...";
+                try {
+                    const res = await fetch('/api/save-cookies', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({cookies_text: text})
+                    });
+                    const d = await res.json();
+                    if (d.success) {
+                        cookieSaveMsg.innerHTML = '<span style="color:#22c55e;">✅ Saved!</span>';
+                        cookieBadge.innerText = '● Cookies Active';
+                        cookieBadge.className = 'cookie-status-tag tag-active';
+                    } else {
+                        cookieSaveMsg.innerHTML = '<span style="color:#ef4444;">❌ Failed</span>';
+                    }
+                } catch(e) {
+                    cookieSaveMsg.innerText = "Error: " + e;
+                } finally {
+                    btnSaveCookies.disabled = false;
+                    btnSaveCookies.innerText = "Save Cookies to Server";
+                }
+            });
+
             let lastInspectedUrl = "";
 
             // Inspect video qualities dynamically
@@ -788,7 +958,6 @@ def index():
                     videoTitle.innerText = data.title || "Video Stream";
                     videoMeta.innerText = `Duration: ${data.duration_formatted} • Available Resolutions: ${data.qualities.map(q => q.value + 'p').join(', ')}`;
 
-                    // Populate Video Quality dropdown dynamically
                     videoQuality.innerHTML = "";
                     data.qualities.forEach((q, idx) => {
                         const opt = document.createElement('option');
