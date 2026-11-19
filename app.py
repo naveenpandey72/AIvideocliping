@@ -580,9 +580,16 @@ def index():
                 border-radius: 12px;
                 padding: 1rem;
                 margin: 1.25rem 0;
-                display: flex;
                 gap: 1.25rem;
                 align-items: center;
+                animation: fadeIn 0.3s ease;
+            }
+            .video-preview-card.visible {
+                display: flex;
+            }
+            @keyframes fadeIn {
+                from { opacity: 0; transform: translateY(-4px); }
+                to { opacity: 1; transform: translateY(0); }
             }
             .video-thumb {
                 width: 130px;
@@ -591,6 +598,20 @@ def index():
                 border-radius: 8px;
                 border: 1px solid var(--border);
                 background: #0f172a;
+                display: none;
+                flex-shrink: 0;
+            }
+            .video-icon-placeholder {
+                width: 130px;
+                height: 75px;
+                border-radius: 8px;
+                border: 1px solid var(--border);
+                background: #0f172a;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 1.8rem;
+                flex-shrink: 0;
             }
             .video-info-title {
                 font-weight: 700;
@@ -912,10 +933,11 @@ def index():
 
                     <!-- Video Preview & Metadata Card -->
                     <div id="videoPreviewCard" class="video-preview-card">
-                        <img id="videoThumb" class="video-thumb" src="" alt="Thumbnail">
-                        <div>
-                            <div id="videoTitle" class="video-info-title">Inspecting stream...</div>
-                            <div id="videoMeta" class="video-info-meta">Loading video formats...</div>
+                        <div id="videoPlaceholderIcon" class="video-icon-placeholder">🎬</div>
+                        <img id="videoThumb" class="video-thumb" src="" alt="Video Thumbnail" referrerpolicy="no-referrer">
+                        <div style="flex-grow: 1; overflow: hidden;">
+                            <div id="videoTitle" class="video-info-title">Analyzing stream...</div>
+                            <div id="videoMeta" class="video-info-meta">Detecting resolutions and duration...</div>
                         </div>
                     </div>
 
@@ -1031,6 +1053,7 @@ def index():
             const videoUrlInput = document.getElementById('videoUrl');
             const btnInspect = document.getElementById('btnInspect');
             const videoPreviewCard = document.getElementById('videoPreviewCard');
+            const videoPlaceholderIcon = document.getElementById('videoPlaceholderIcon');
             const videoThumb = document.getElementById('videoThumb');
             const videoTitle = document.getElementById('videoTitle');
             const videoMeta = document.getElementById('videoMeta');
@@ -1065,10 +1088,11 @@ def index():
                 accordionIcon.innerText = isOpen ? '▼' : '▲';
             });
 
-            // Check cookie status on load
+            // Check cookie status on load with graceful fallback
             async function checkCookies() {
                 try {
                     const res = await fetch('/api/cookie-status');
+                    if (!res.ok) throw new Error("Status " + res.status);
                     const data = await res.json();
                     if (data.has_cookies) {
                         cookieBadge.innerText = '● Cookies Active';
@@ -1077,14 +1101,21 @@ def index():
                         cookieBadge.innerText = '⚠️ No Cookies (Click to Setup)';
                         cookieBadge.className = 'cookie-status-tag tag-missing';
                     }
-                } catch(e) {}
+                } catch(e) {
+                    cookieBadge.innerText = '⚠️ No Cookies (Click to Setup)';
+                    cookieBadge.className = 'cookie-status-tag tag-missing';
+                }
             }
             checkCookies();
+            setInterval(checkCookies, 15000);
 
             // Save cookies
             btnSaveCookies.addEventListener('click', async () => {
                 const text = cookiesInput.value.trim();
-                if (!text) return;
+                if (!text) {
+                    cookieSaveMsg.innerHTML = '<span style="color:#ef4444;">Please paste cookies first</span>';
+                    return;
+                }
                 btnSaveCookies.disabled = true;
                 btnSaveCookies.innerText = "Saving...";
                 try {
@@ -1098,6 +1129,7 @@ def index():
                         cookieSaveMsg.innerHTML = '<span style="color:#22c55e;">✅ Saved!</span>';
                         cookieBadge.innerText = '● Cookies Active';
                         cookieBadge.className = 'cookie-status-tag tag-active';
+                        cookiesInput.value = "";
                     } else {
                         cookieSaveMsg.innerHTML = '<span style="color:#ef4444;">❌ Failed</span>';
                     }
@@ -1110,16 +1142,23 @@ def index():
             });
 
             let lastInspectedUrl = "";
+            let inspectDebounceTimer = null;
 
             // Inspect video qualities dynamically
             async function inspectVideo() {
                 const url = videoUrlInput.value.trim();
-                if (!url || url === lastInspectedUrl) return;
+                if (!url || !url.startsWith("http")) {
+                    videoPreviewCard.classList.remove('visible');
+                    return;
+                }
+                if (url === lastInspectedUrl) return;
                 lastInspectedUrl = url;
 
                 btnInspect.disabled = true;
                 btnInspect.innerText = "Inspecting...";
-                videoPreviewCard.style.display = "flex";
+                videoPreviewCard.classList.add('visible');
+                videoPlaceholderIcon.style.display = "flex";
+                videoThumb.style.display = "none";
                 videoTitle.innerText = "Analyzing stream metadata...";
                 videoMeta.innerText = "Checking video streams and available resolutions...";
 
@@ -1131,21 +1170,41 @@ def index():
                     }
                     const data = await res.json();
 
-                    videoThumb.src = data.thumbnail || "";
-                    videoTitle.innerText = data.title || "Video Stream";
-                    videoMeta.innerText = `Duration: ${data.duration_formatted} • Available Resolutions: ${data.qualities.map(q => q.value + 'p').join(', ')}`;
+                    if (data.thumbnail) {
+                        videoThumb.src = data.thumbnail;
+                        videoThumb.onload = () => {
+                            videoThumb.style.display = "block";
+                            videoPlaceholderIcon.style.display = "none";
+                        };
+                        videoThumb.onerror = () => {
+                            videoThumb.style.display = "none";
+                            videoPlaceholderIcon.style.display = "flex";
+                        };
+                    } else {
+                        videoThumb.style.display = "none";
+                        videoPlaceholderIcon.style.display = "flex";
+                    }
 
-                    videoQuality.innerHTML = "";
-                    data.qualities.forEach((q, idx) => {
-                        const opt = document.createElement('option');
-                        opt.value = q.value;
-                        opt.innerText = q.label;
-                        if (idx === 0) opt.selected = true;
-                        videoQuality.appendChild(opt);
-                    });
+                    videoTitle.innerText = data.title || "YouTube Stream";
+                    const qualSummary = (data.qualities || []).map(q => q.value + 'p').slice(0, 4).join(', ');
+                    videoMeta.innerText = `Duration: ${data.duration_formatted} • Available: ${qualSummary}`;
+
+                    if (data.qualities && data.qualities.length > 0) {
+                        videoQuality.innerHTML = "";
+                        data.qualities.forEach((q, idx) => {
+                            const opt = document.createElement('option');
+                            opt.value = q.value;
+                            opt.innerText = q.label;
+                            if (idx === 0) opt.selected = true;
+                            videoQuality.appendChild(opt);
+                        });
+                    }
                 } catch (err) {
-                    videoTitle.innerText = "Stream detected";
-                    videoMeta.innerText = "Using adaptive quality engine (auto-scaling up to 2160p).";
+                    console.warn("Video inspection notice:", err);
+                    videoPlaceholderIcon.style.display = "flex";
+                    videoThumb.style.display = "none";
+                    videoTitle.innerText = "YouTube Stream Detected";
+                    videoMeta.innerText = "Ready to clip with adaptive quality engine (auto-scaling up to 2160p 4K).";
                 } finally {
                     btnInspect.disabled = false;
                     btnInspect.innerText = "Inspect Qualities";
@@ -1154,7 +1213,16 @@ def index():
 
             btnInspect.addEventListener('click', inspectVideo);
             videoUrlInput.addEventListener('change', inspectVideo);
-            videoUrlInput.addEventListener('paste', () => setTimeout(inspectVideo, 100));
+            videoUrlInput.addEventListener('paste', () => setTimeout(inspectVideo, 150));
+            videoUrlInput.addEventListener('input', () => {
+                clearTimeout(inspectDebounceTimer);
+                inspectDebounceTimer = setTimeout(() => {
+                    const val = videoUrlInput.value.trim();
+                    if (val.length > 15 && (val.includes("youtube.com") || val.includes("youtu.be"))) {
+                        inspectVideo();
+                    }
+                }, 800);
+            });
 
             // Submit generation job
             clipperForm.addEventListener('submit', async (e) => {
@@ -1408,11 +1476,15 @@ def index():
                 });
             }
 
-            // Restore active job if user refreshed or navigated back
+            // Restore active job if user refreshed or navigated back, and check for existing URL
             window.addEventListener('DOMContentLoaded', () => {
                 const savedJobId = localStorage.getItem('active_clipper_job_id');
                 if (savedJobId) {
                     pollJob(savedJobId, true);
+                }
+                const existingUrl = videoUrlInput.value.trim();
+                if (existingUrl && (existingUrl.includes("youtube.com") || existingUrl.includes("youtu.be"))) {
+                    inspectVideo();
                 }
             });
         </script>
