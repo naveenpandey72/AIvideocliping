@@ -1,0 +1,29 @@
+# Virtual Environment
+.venv/
+env/
+venv/
+
+# Secrets & Credentials (DO NOT COMMIT TO PUBLIC REPO)
+service_account.json
+*.pem
+*.key
+.env
+
+# Ephemeral & rendered media
+temp_work/
+final_clips/*.mp4
+test_viral_short.mp4
+*.webm
+*.part
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

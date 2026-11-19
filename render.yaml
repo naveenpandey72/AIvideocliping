@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: ai-video-clipper
+    runtime: docker
+    plan: standard # Recommended for FFmpeg + Faster-Whisper video encoding (2GB+ RAM)
+    region: oregon
+    dockerfilePath: Dockerfile
+    autoDeploy: true
+    healthCheckPath: /
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: GDRIVE_FOLDER_ID
+        value: 15sSEzMzBc6TQ_xG22EnZS6Kaae6Qu9d6
+      # Set GDRIVE_SERVICE_ACCOUNT_JSON in Render dashboard under Environment / Secret Files
