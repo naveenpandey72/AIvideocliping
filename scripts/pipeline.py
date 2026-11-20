@@ -42,7 +42,7 @@ def run_job(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     duration: Optional[float] = None,
-    model_name: str = "base",
+    model_name: str = "tiny",
     force_pillarbox: bool = False,
     quality: Optional[str] = "2160"
 ) -> Path:

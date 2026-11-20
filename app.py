@@ -362,6 +362,7 @@ def execute_multi_clip_job(job_id: str, req: ClipRequest):
                 output_filename=clip_name,
                 start_time=str(seg["start"]),
                 end_time=str(seg["end"]),
+                model_name="tiny",
                 force_pillarbox=pillarbox,
                 quality=req.video_quality
             )
