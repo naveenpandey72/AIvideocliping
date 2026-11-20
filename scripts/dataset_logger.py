@@ -1,4 +1,4 @@
-﻿# scripts/dataset_logger.py
+# scripts/dataset_logger.py
 """
 dataset_logger.py - Autonomous Training Dataset Logger for AI Video Clipping Models
 Logs every video inspection, user prompt, system prompt, and model completion both:

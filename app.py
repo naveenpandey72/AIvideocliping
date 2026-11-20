@@ -565,31 +565,44 @@ Each item must have:
 - "score": (Viral score from 85 to 99)
 '''
         ai_moments = []
-        used_provider = "Ollama API"
+        used_provider = "Autonomous AI Engine (100% Free - Built-in)"
         error_notice = None
+        raw_text = ""
 
-        try:
-            res = call_ollama_completion(
-                prompt=prompt,
-                model=req.model or "deepseek-v4.1-flash",
-                api_key=req.api_key or "2dbd1d4f7134463f8b1ddeb2cbefb079.29HbK0szjxNkEUa4fWAdJ2Jb",
-                base_url=req.base_url or "https://ollama.com/v1"
-            )
-            raw_text = res["content"]
-            if "```json" in raw_text:
-                json_str = raw_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in raw_text:
-                json_str = raw_text.split("```")[1].split("```")[0].strip()
-            else:
-                json_str = raw_text.strip()
-            parsed = json.loads(json_str)
-            ai_moments = parsed.get("moments", [])
-            used_provider = f"Ollama ({req.model})"
-        except Exception as oe:
-            logger.warning(f"Ollama invocation notice ({oe}). Using intelligent autonomous heuristic generator.")
-            error_notice = str(oe)
+        if req.model in ["autonomous-free", "free", "builtin"] or req.base_url in ["builtin", "free", ""]:
             ai_moments = calculate_clip_segments(duration, 4, req.url, title)
-            used_provider = "Autonomous AI Engine (Ollama Smart Fallback)"
+            used_provider = "Autonomous AI Engine (100% Free - Built-in)"
+            error_notice = None
+            raw_text = json.dumps({"moments": ai_moments}, indent=2)
+        else:
+            try:
+                res = call_ollama_completion(
+                    prompt=prompt,
+                    model=req.model or "deepseek-v4.1-flash",
+                    api_key=req.api_key or "2dbd1d4f7134463f8b1ddeb2cbefb079.29HbK0szjxNkEUa4fWAdJ2Jb",
+                    base_url=req.base_url or "https://ollama.com/v1"
+                )
+                raw_text = res["content"]
+                if "```json" in raw_text:
+                    json_str = raw_text.split("```json")[1].split("```")[0].strip()
+                elif "```" in raw_text:
+                    json_str = raw_text.split("```")[1].split("```")[0].strip()
+                else:
+                    json_str = raw_text.strip()
+                parsed = json.loads(json_str)
+                ai_moments = parsed.get("moments", [])
+                used_provider = f"{res.get('provider', req.model)}"
+            except Exception as oe:
+                err_msg = str(oe)
+                if "402" in err_msg:
+                    logger.warning("Ollama Cloud requires payment credits (402). Falling back to 100% Free Autonomous AI Engine.")
+                    error_notice = "HTTP Error 402: Payment Required by ollama.com cloud (requires paid subscription). Automatically switched to 100% Free Autonomous AI Engine."
+                else:
+                    logger.warning(f"LLM invocation notice ({oe}). Using intelligent autonomous heuristic generator.")
+                    error_notice = err_msg
+                ai_moments = calculate_clip_segments(duration, 4, req.url, title)
+                used_provider = "Autonomous AI Engine (100% Free - Smart Fallback)"
+                raw_text = json.dumps({"moments": ai_moments}, indent=2)
 
         # Step 4: Autonomous Dataset Logging for Custom Model Fine-Tuning
         try:

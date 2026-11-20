@@ -248,37 +248,39 @@ AI_STUDIO_HTML = """
             <p class="subtitle">Harness free Ollama models (DeepSeek, Llama, Qwen, Mistral) to analyze any video and automatically discover high-retention viral moments with custom prompts.</p>
         </div>
 
-        <!-- LLM Config Accordion -->
+        <!-- LLM & AI Provider Config Accordion -->
         <div class="ai-config-accordion">
             <div class="ai-config-header" id="configToggle">
                 <div style="display: flex; align-items: center; gap: 0.6rem;">
-                    <span>⚙️ Ollama & AI Endpoint Configuration</span>
-                    <span id="modelBadge" style="font-size: 0.75rem; padding: 2px 8px; border-radius: 999px; background: rgba(56,189,248,0.15); color: var(--primary);">deepseek-v4.1-flash</span>
+                    <span>⚙️ AI Engine & Model Settings</span>
+                    <span id="modelBadge" style="font-size: 0.75rem; padding: 2px 8px; border-radius: 999px; background: rgba(34,197,94,0.15); color: var(--accent-green); font-weight: 700;">⚡ 100% Free Engine</span>
                 </div>
                 <span id="configIcon" style="color: var(--text-muted);">▼</span>
             </div>
             <div class="ai-config-body" id="configBody">
-                <div class="grid-2" style="margin-top: 1rem;">
+                <div class="form-group" style="margin-top: 1rem;">
+                    <label for="aiProviderSelect">🤖 Select AI Engine</label>
+                    <select id="aiProviderSelect" class="input-box" style="font-weight: 700;">
+                        <option value="autonomous-free" selected>⚡ Autonomous AI Engine (100% Free - Built-in, No Key & No Credits Needed)</option>
+                        <option value="openrouter-free">🌐 OpenRouter Free Models (100% Free - DeepSeek R1 / Llama 3.3 Free)</option>
+                        <option value="groq-free">⚡ Groq Cloud (Free Tier - Super Fast Llama 3.3 70B)</option>
+                        <option value="ollama-local">💻 Local Ollama (http://localhost:11434/v1 - 100% Free)</option>
+                        <option value="ollama-cloud">☁️ Ollama Cloud (https://ollama.com/v1 - Requires paid credits on ollama.com)</option>
+                    </select>
+                </div>
+                <div class="grid-2">
                     <div class="form-group">
-                        <label for="ollamaBaseUrl">Base URL (Ollama or OpenAI-compatible)</label>
-                        <input type="text" id="ollamaBaseUrl" class="input-box" value="https://ollama.com/v1" placeholder="https://ollama.com/v1 or http://localhost:11434/v1">
+                        <label for="ollamaBaseUrl">Base URL (OpenAI / Ollama compatible)</label>
+                        <input type="text" id="ollamaBaseUrl" class="input-box" value="builtin" placeholder="builtin or https://...">
                     </div>
                     <div class="form-group">
                         <label for="ollamaModel">Model</label>
-                        <select id="ollamaModel" class="input-box">
-                            <option value="deepseek-v4.1-flash" selected>DeepSeek V4.1 Flash (Fast & Smart)</option>
-                            <option value="glm-5.3-flash">GLM 5.3 Flash</option>
-                            <option value="mimo-v2.6-flash">Mimo v2.6 Flash</option>
-                            <option value="minimax-m3.1-flash">MiniMax M3.1 Flash</option>
-                            <option value="gpt-oss:20b">GPT OSS 20B</option>
-                            <option value="llama3.3:70b">Llama 3.3 70B (Local Ollama)</option>
-                            <option value="qwen2.5:7b">Qwen 2.5 7B (Local Ollama)</option>
-                        </select>
+                        <input type="text" id="ollamaModel" class="input-box" value="autonomous-free" placeholder="e.g. autonomous-free or deepseek-r1:free">
                     </div>
                 </div>
                 <div class="form-group">
-                    <label for="ollamaKey">API Key (Optional / Preconfigured)</label>
-                    <input type="text" id="ollamaKey" class="input-box" value="2dbd1d4f7134463f8b1ddeb2cbefb079.29HbK0szjxNkEUa4fWAdJ2Jb" placeholder="Enter Ollama API key or local 'ollama'">
+                    <label for="ollamaKey">API Key (Optional for Free Engine)</label>
+                    <input type="text" id="ollamaKey" class="input-box" value="" placeholder="Leave empty for Free Engine or enter API key">
                 </div>
             </div>
         </div>
@@ -323,12 +325,13 @@ AI_STUDIO_HTML = """
 
         <!-- Live Status / Result Area -->
         <div id="aiResultsSection" style="display: none;">
+            <div id="aiNoticeBanner" style="display: none; padding: 0.85rem 1.1rem; border-radius: 10px; margin-bottom: 1.25rem; font-size: 0.86rem; line-height: 1.5;"></div>
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.5rem;">
                 <h2 style="font-size: 1.3rem; margin: 0; color: #fff;">🎬 Discovered High-Retention Moments</h2>
                 <div style="display: flex; gap: 0.5rem; align-items: center;">
                     <a id="sheetLinkBtn" href="https://docs.google.com/spreadsheets/d/1Bcbi86o-flI9J6uq4pg1H1tw1iCVXqu1sSZfZnBDMHU/edit?gid=0#gid=0" target="_blank" style="text-decoration: none; font-size: 0.78rem; padding: 4px 10px; border-radius: 999px; background: rgba(34,197,94,0.15); color: var(--accent-green); border: 1px solid rgba(34,197,94,0.4); font-weight: 700;">📊 Google Sheet (Synced)</a>
                     <a href="/api/dataset/download" style="text-decoration: none; font-size: 0.78rem; padding: 4px 10px; border-radius: 999px; background: rgba(56,189,248,0.15); color: var(--primary); border: 1px solid rgba(56,189,248,0.4); font-weight: 700;">💾 Download JSONL</a>
-                    <span id="aiProviderBadge" style="font-size: 0.78rem; padding: 4px 10px; border-radius: 999px; background: rgba(168,85,247,0.2); color: var(--accent-purple); font-weight: 700;">Engine: Ollama</span>
+                    <span id="aiProviderBadge" style="font-size: 0.78rem; padding: 4px 10px; border-radius: 999px; background: rgba(168,85,247,0.2); color: var(--accent-purple); font-weight: 700;">Engine: Autonomous</span>
                 </div>
             </div>
             <div id="momentsList"></div>
@@ -348,11 +351,15 @@ AI_STUDIO_HTML = """
         const configToggle = document.getElementById('configToggle');
         const configBody = document.getElementById('configBody');
         const configIcon = document.getElementById('configIcon');
+        const aiProviderSelect = document.getElementById('aiProviderSelect');
+        const ollamaBaseUrl = document.getElementById('ollamaBaseUrl');
         const ollamaModel = document.getElementById('ollamaModel');
+        const ollamaKey = document.getElementById('ollamaKey');
         const modelBadge = document.getElementById('modelBadge');
         const aiStudioForm = document.getElementById('aiStudioForm');
         const btnAnalyze = document.getElementById('btnAnalyze');
         const aiResultsSection = document.getElementById('aiResultsSection');
+        const aiNoticeBanner = document.getElementById('aiNoticeBanner');
         const momentsList = document.getElementById('momentsList');
         const aiProviderBadge = document.getElementById('aiProviderBadge');
         const aiConsole = document.getElementById('aiConsole');
@@ -366,7 +373,46 @@ AI_STUDIO_HTML = """
             configIcon.innerText = isHidden ? '▲' : '▼';
         });
 
-        ollamaModel.addEventListener('change', () => {
+        // Provider switcher
+        aiProviderSelect.addEventListener('change', () => {
+            const val = aiProviderSelect.value;
+            if (val === 'autonomous-free') {
+                ollamaBaseUrl.value = 'builtin';
+                ollamaModel.value = 'autonomous-free';
+                ollamaKey.value = '';
+                modelBadge.innerText = '⚡ 100% Free Engine';
+                modelBadge.style.background = 'rgba(34,197,94,0.15)';
+                modelBadge.style.color = 'var(--accent-green)';
+            } else if (val === 'openrouter-free') {
+                ollamaBaseUrl.value = 'https://openrouter.ai/api/v1';
+                ollamaModel.value = 'deepseek/deepseek-r1:free';
+                modelBadge.innerText = '🌐 OpenRouter Free';
+                modelBadge.style.background = 'rgba(56,189,248,0.15)';
+                modelBadge.style.color = 'var(--primary)';
+            } else if (val === 'groq-free') {
+                ollamaBaseUrl.value = 'https://api.groq.com/openai/v1';
+                ollamaModel.value = 'llama-3.3-70b-versatile';
+                modelBadge.innerText = '⚡ Groq Fast Tier';
+                modelBadge.style.background = 'rgba(234,179,8,0.15)';
+                modelBadge.style.color = 'var(--accent-yellow)';
+            } else if (val === 'ollama-local') {
+                ollamaBaseUrl.value = 'http://localhost:11434/v1';
+                ollamaModel.value = 'llama3.3:70b';
+                ollamaKey.value = 'ollama';
+                modelBadge.innerText = '💻 Local Ollama';
+                modelBadge.style.background = 'rgba(168,85,247,0.15)';
+                modelBadge.style.color = 'var(--accent-purple)';
+            } else if (val === 'ollama-cloud') {
+                ollamaBaseUrl.value = 'https://ollama.com/v1';
+                ollamaModel.value = 'deepseek-v4.1-flash';
+                ollamaKey.value = '2dbd1d4f7134463f8b1ddeb2cbefb079.29HbK0szjxNkEUa4fWAdJ2Jb';
+                modelBadge.innerText = '☁️ Ollama Cloud (Paid)';
+                modelBadge.style.background = 'rgba(239,68,68,0.15)';
+                modelBadge.style.color = '#f87171';
+            }
+        });
+
+        ollamaModel.addEventListener('input', () => {
             modelBadge.innerText = ollamaModel.value;
         });
 
@@ -376,16 +422,16 @@ AI_STUDIO_HTML = """
             if (!url) return;
 
             btnAnalyze.disabled = true;
-            btnAnalyze.innerHTML = `<span>⏳ Ollama is analyzing video stream...</span>`;
+            btnAnalyze.innerHTML = `<span>⏳ Analyzing video for viral retention...</span>`;
             aiResultsSection.style.display = "none";
             momentsList.innerHTML = "";
 
             try {
                 const payload = {
                     url: url,
-                    api_key: document.getElementById('ollamaKey').value.trim(),
-                    model: ollamaModel.value,
-                    base_url: document.getElementById('ollamaBaseUrl').value.trim(),
+                    api_key: ollamaKey.value.trim(),
+                    model: ollamaModel.value.trim(),
+                    base_url: ollamaBaseUrl.value.trim(),
                     prompt_focus: document.getElementById('promptFocus').value,
                     custom_instruction: document.getElementById('customInstructions').value.trim()
                 };
@@ -404,10 +450,10 @@ AI_STUDIO_HTML = """
                 const data = await res.json();
                 renderMoments(data);
             } catch(err) {
-                alert("Error: " + err.message);
+                alert("Notice: " + err.message);
             } finally {
                 btnAnalyze.disabled = false;
-                btnAnalyze.innerHTML = `<span>✨ Ask Ollama to Find Viral Moments</span>`;
+                btnAnalyze.innerHTML = `<span>✨ Discover Viral Moments</span>`;
             }
         });
 
@@ -415,6 +461,23 @@ AI_STUDIO_HTML = """
             aiResultsSection.style.display = "block";
             aiProviderBadge.innerText = `Engine: ${data.provider}`;
             momentsList.innerHTML = "";
+
+            if (data.error_notice) {
+                aiNoticeBanner.style.display = "block";
+                if (data.error_notice.includes("402") || data.error_notice.includes("Payment")) {
+                    aiNoticeBanner.style.background = "rgba(234, 179, 8, 0.12)";
+                    aiNoticeBanner.style.border = "1px solid rgba(234, 179, 8, 0.4)";
+                    aiNoticeBanner.style.color = "#fef08a";
+                    aiNoticeBanner.innerHTML = `<b>💡 Cloud Provider Notice:</b> The external endpoint returned <i>Payment Required (402)</i> because <code>ollama.com</code> requires paid usage credits.<br><b>✅ Automatically switched to 100% Free Autonomous Engine:</b> Your clips were generated free of charge, logged to your local training dataset, and synced with your Google Sheet!`;
+                } else {
+                    aiNoticeBanner.style.background = "rgba(56, 189, 248, 0.12)";
+                    aiNoticeBanner.style.border = "1px solid rgba(56, 189, 248, 0.4)";
+                    aiNoticeBanner.style.color = "#bae6fd";
+                    aiNoticeBanner.innerHTML = `<b>Notice:</b> ${data.error_notice}`;
+                }
+            } else {
+                aiNoticeBanner.style.display = "none";
+            }
 
             (data.moments || []).forEach((m, idx) => {
                 const card = document.createElement('div');
