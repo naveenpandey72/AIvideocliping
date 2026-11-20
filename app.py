@@ -25,6 +25,7 @@ from scripts.pipeline import run_job
 from scripts.gdrive_upload import upload_file_to_drive
 from scripts.ingest import find_cookie_file
 from scripts.smart_hook_detector import detect_viral_moments
+from ai_studio_template import AI_STUDIO_HTML
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("UniversalClipperApp")
@@ -104,6 +105,14 @@ class ClipRequest(BaseModel):
 
 class CookiesRequest(BaseModel):
     cookies_text: str
+
+class OllamaAnalyzeRequest(BaseModel):
+    url: str
+    api_key: Optional[str] = "2dbd1d4f7134463f8b1ddeb2cbefb079.29HbK0szjxNkEUa4fWAdJ2Jb"
+    model: Optional[str] = "deepseek-v4.1-flash"
+    base_url: Optional[str] = "https://ollama.com/v1"
+    prompt_focus: Optional[str] = "viral_hooks"
+    custom_instruction: Optional[str] = None
 
 def auto_delete_file(file_path: Path):
     """Deletes a rendered file from server disk after client download to preserve 0 MB storage."""
@@ -461,6 +470,115 @@ def index():
     resp.headers["Expires"] = "0"
     return resp
 
+@app.get("/ai-studio", response_class=HTMLResponse)
+def ai_studio():
+    resp = HTMLResponse(content=AI_STUDIO_HTML)
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+def call_ollama_completion(prompt: str, model: str = "deepseek-v4.1-flash", api_key: str = "", base_url: str = "https://ollama.com/v1") -> Dict[str, Any]:
+    """Invokes Ollama or compatible LLM endpoint."""
+    clean_base = base_url.rstrip("/")
+    endpoint = f"{clean_base}/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are an elite viral video editor and content strategist. Analyze video context, extract high-retention viral moments, write curiosity hooks, and output exact start/end timestamps."
+            },
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.7
+    }
+    req = urllib.request.Request(endpoint, headers=headers, data=json.dumps(payload).encode("utf-8"))
+    with urllib.request.urlopen(req, timeout=40) as res:
+        data = json.loads(res.read().decode("utf-8"))
+        return {
+            "success": True,
+            "content": data["choices"][0]["message"]["content"],
+            "model": model,
+            "provider": f"Ollama Cloud ({model})"
+        }
+
+@app.post("/api/ollama/analyze")
+async def analyze_video_with_ollama(req: OllamaAnalyzeRequest):
+    """Uses Ollama LLM to discover viral moments from video metadata and topics."""
+    try:
+        meta = fetch_video_metadata(req.url)
+        title = meta.get("title", "Video Stream")
+        duration = meta.get("duration", 600)
+        dur_fmt = meta.get("duration_formatted", "10:00")
+        
+        system_instruction = req.custom_instruction or "Find the 4 highest-retention, most viral moments in this video. Provide exact start and end timestamps (between 25 and 55 seconds each), irresistible curiosity hooks, catchy titles with emojis, and trending hashtags."
+        
+        prompt = f'''
+Analyze this YouTube video and extract viral Shorts:
+Video Title: "{title}"
+Total Duration: {dur_fmt} ({duration} seconds)
+Target Format: 9:16 Vertical Shorts (25s - 55s per clip)
+Focus: {req.prompt_focus}
+
+Instructions: {system_instruction}
+
+Respond strictly in valid JSON format with a list named "moments".
+Each item must have:
+- "title": (Punchy viral title with emojis, max 60 chars)
+- "start": (start timestamp in seconds as float/int, must be between 0 and {duration})
+- "end": (end timestamp in seconds as float/int, 25-55s after start)
+- "hook": (Spoken opening hook that keeps viewers watching)
+- "reason": (Why this moment will blow up on Reels/Shorts)
+- "hashtags": (List of 5 trending hashtags)
+- "score": (Viral score from 85 to 99)
+'''
+        ai_moments = []
+        used_provider = "Ollama API"
+        error_notice = None
+
+        try:
+            res = call_ollama_completion(
+                prompt=prompt,
+                model=req.model or "deepseek-v4.1-flash",
+                api_key=req.api_key or "2dbd1d4f7134463f8b1ddeb2cbefb079.29HbK0szjxNkEUa4fWAdJ2Jb",
+                base_url=req.base_url or "https://ollama.com/v1"
+            )
+            raw_text = res["content"]
+            if "```json" in raw_text:
+                json_str = raw_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in raw_text:
+                json_str = raw_text.split("```")[1].split("```")[0].strip()
+            else:
+                json_str = raw_text.strip()
+            parsed = json.loads(json_str)
+            ai_moments = parsed.get("moments", [])
+            used_provider = f"Ollama ({req.model})"
+        except Exception as oe:
+            logger.warning(f"Ollama invocation notice ({oe}). Using intelligent autonomous heuristic generator.")
+            error_notice = str(oe)
+            ai_moments = calculate_clip_segments(duration, 4, req.url, title)
+            used_provider = "Autonomous AI Engine (Ollama Smart Fallback)"
+
+        return {
+            "success": True,
+            "video": {
+                "title": title,
+                "duration": duration,
+                "duration_formatted": dur_fmt,
+                "thumbnail": meta.get("thumbnail")
+            },
+            "provider": used_provider,
+            "error_notice": error_notice,
+            "moments": ai_moments
+        }
+    except Exception as e:
+        logger.error(f"Ollama analyze failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
 INDEX_HTML = """
     <!DOCTYPE html>
     <html lang="en">
@@ -500,6 +618,39 @@ INDEX_HTML = """
             .header {
                 text-align: center;
                 margin-bottom: 2rem;
+            }
+            .nav-tabs {
+                display: flex;
+                gap: 0.75rem;
+                justify-content: center;
+                margin-bottom: 2rem;
+                background: rgba(17, 24, 39, 0.7);
+                padding: 0.4rem;
+                border-radius: 999px;
+                border: 1px solid var(--border);
+                width: fit-content;
+                margin-left: auto;
+                margin-right: auto;
+            }
+            .nav-tab-btn {
+                padding: 0.6rem 1.4rem;
+                border-radius: 999px;
+                text-decoration: none;
+                font-size: 0.9rem;
+                font-weight: 700;
+                transition: all 0.2s ease;
+                display: inline-flex;
+                align-items: center;
+                gap: 0.5rem;
+                color: var(--text-muted);
+            }
+            .nav-tab-btn:hover {
+                color: #fff;
+            }
+            .nav-tab-btn.active {
+                background: var(--primary);
+                color: #090d16;
+                box-shadow: 0 4px 15px rgba(56, 189, 248, 0.3);
             }
             .badge-chip {
                 display: inline-flex;
@@ -898,6 +1049,11 @@ INDEX_HTML = """
     </head>
     <body>
         <div class="app-container">
+            <div class="nav-tabs">
+                <a href="/" class="nav-tab-btn active">⚡ Standard Clipper</a>
+                <a href="/ai-studio" class="nav-tab-btn">🤖 AI Studio (Ollama / LLM)</a>
+            </div>
+
             <div class="header">
                 <div class="badge-chip">⚡ Autonomous Video Engine</div>
                 <h1>Universal AI Video Clipper</h1>
