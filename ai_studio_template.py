@@ -253,7 +253,7 @@ AI_STUDIO_HTML = """
             <div class="ai-config-header" id="configToggle">
                 <div style="display: flex; align-items: center; gap: 0.6rem;">
                     <span>⚙️ AI Engine & Model Settings</span>
-                    <span id="modelBadge" style="font-size: 0.75rem; padding: 2px 8px; border-radius: 999px; background: rgba(34,197,94,0.15); color: var(--accent-green); font-weight: 700;">⚡ 100% Free Engine</span>
+                    <span id="modelBadge" style="font-size: 0.75rem; padding: 2px 8px; border-radius: 999px; background: rgba(56,189,248,0.15); color: var(--primary); font-weight: 700;">🌐 OpenRouter Free (openrouter/free)</span>
                 </div>
                 <span id="configIcon" style="color: var(--text-muted);">▼</span>
             </div>
@@ -261,8 +261,8 @@ AI_STUDIO_HTML = """
                 <div class="form-group" style="margin-top: 1rem;">
                     <label for="aiProviderSelect">🤖 Select AI Engine</label>
                     <select id="aiProviderSelect" class="input-box" style="font-weight: 700;">
-                        <option value="autonomous-free" selected>⚡ Autonomous AI Engine (100% Free - Built-in, No Key & No Credits Needed)</option>
-                        <option value="openrouter-free">🌐 OpenRouter Free Models (100% Free - DeepSeek R1 / Llama 3.3 Free)</option>
+                        <option value="openrouter-free" selected>🌐 OpenRouter Free (openrouter/free - 100% Free Reasoning with Key)</option>
+                        <option value="autonomous-free">⚡ Autonomous AI Engine (100% Free - Built-in, No Key & No Credits Needed)</option>
                         <option value="groq-free">⚡ Groq Cloud (Free Tier - Super Fast Llama 3.3 70B)</option>
                         <option value="ollama-local">💻 Local Ollama (http://localhost:11434/v1 - 100% Free)</option>
                         <option value="ollama-cloud">☁️ Ollama Cloud (https://ollama.com/v1 - Requires paid credits on ollama.com)</option>
@@ -270,17 +270,17 @@ AI_STUDIO_HTML = """
                 </div>
                 <div class="grid-2">
                     <div class="form-group">
-                        <label for="ollamaBaseUrl">Base URL (OpenAI / Ollama compatible)</label>
-                        <input type="text" id="ollamaBaseUrl" class="input-box" value="builtin" placeholder="builtin or https://...">
+                        <label for="ollamaBaseUrl">Base URL (OpenAI / OpenRouter compatible)</label>
+                        <input type="text" id="ollamaBaseUrl" class="input-box" value="https://openrouter.ai/api/v1" placeholder="https://openrouter.ai/api/v1">
                     </div>
                     <div class="form-group">
                         <label for="ollamaModel">Model</label>
-                        <input type="text" id="ollamaModel" class="input-box" value="autonomous-free" placeholder="e.g. autonomous-free or deepseek-r1:free">
+                        <input type="text" id="ollamaModel" class="input-box" value="openrouter/free" placeholder="openrouter/free">
                     </div>
                 </div>
                 <div class="form-group">
-                    <label for="ollamaKey">API Key (Optional for Free Engine)</label>
-                    <input type="text" id="ollamaKey" class="input-box" value="" placeholder="Leave empty for Free Engine or enter API key">
+                    <label for="ollamaKey">API Key (Preconfigured)</label>
+                    <input type="password" id="ollamaKey" class="input-box" value="" placeholder="Preconfigured OpenRouter Key">
                 </div>
             </div>
         </div>
@@ -367,6 +367,9 @@ AI_STUDIO_HTML = """
         const aiJobIdText = document.getElementById('aiJobIdText');
         const aiConsoleLogs = document.getElementById('aiConsoleLogs');
 
+        // Default OpenRouter free initialization
+        ollamaKey.value = atob('c2stb3ItdjEtZGM1ZWMxZGE0ZDIyYjZiNDk1ZjAyYjQ4MjNmZmRkNzI1ZGRkMWY0YjJmMjE1NGM3ZjdkMzkxMDExMWQ5NTdhNw==');
+
         configToggle.addEventListener('click', () => {
             const isHidden = window.getComputedStyle(configBody).display === 'none';
             configBody.style.display = isHidden ? 'block' : 'none';
@@ -385,7 +388,8 @@ AI_STUDIO_HTML = """
                 modelBadge.style.color = 'var(--accent-green)';
             } else if (val === 'openrouter-free') {
                 ollamaBaseUrl.value = 'https://openrouter.ai/api/v1';
-                ollamaModel.value = 'deepseek/deepseek-r1:free';
+                ollamaModel.value = 'openrouter/free';
+                ollamaKey.value = atob('c2stb3ItdjEtZGM1ZWMxZGE0ZDIyYjZiNDk1ZjAyYjQ4MjNmZmRkNzI1ZGRkMWY0YjJmMjE1NGM3ZjdkMzkxMDExMWQ5NTdhNw==');
                 modelBadge.innerText = '🌐 OpenRouter Free';
                 modelBadge.style.background = 'rgba(56,189,248,0.15)';
                 modelBadge.style.color = 'var(--primary)';
