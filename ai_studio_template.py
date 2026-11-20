@@ -325,7 +325,11 @@ AI_STUDIO_HTML = """
         <div id="aiResultsSection" style="display: none;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.5rem;">
                 <h2 style="font-size: 1.3rem; margin: 0; color: #fff;">🎬 Discovered High-Retention Moments</h2>
-                <span id="aiProviderBadge" style="font-size: 0.78rem; padding: 4px 10px; border-radius: 999px; background: rgba(168,85,247,0.2); color: var(--accent-purple); font-weight: 700;">Engine: Ollama</span>
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                    <a id="sheetLinkBtn" href="https://docs.google.com/spreadsheets/d/1Bcbi86o-flI9J6uq4pg1H1tw1iCVXqu1sSZfZnBDMHU/edit?gid=0#gid=0" target="_blank" style="text-decoration: none; font-size: 0.78rem; padding: 4px 10px; border-radius: 999px; background: rgba(34,197,94,0.15); color: var(--accent-green); border: 1px solid rgba(34,197,94,0.4); font-weight: 700;">📊 Google Sheet (Synced)</a>
+                    <a href="/api/dataset/download" style="text-decoration: none; font-size: 0.78rem; padding: 4px 10px; border-radius: 999px; background: rgba(56,189,248,0.15); color: var(--primary); border: 1px solid rgba(56,189,248,0.4); font-weight: 700;">💾 Download JSONL</a>
+                    <span id="aiProviderBadge" style="font-size: 0.78rem; padding: 4px 10px; border-radius: 999px; background: rgba(168,85,247,0.2); color: var(--accent-purple); font-weight: 700;">Engine: Ollama</span>
+                </div>
             </div>
             <div id="momentsList"></div>
         </div>

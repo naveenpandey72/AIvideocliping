@@ -25,6 +25,7 @@ from scripts.pipeline import run_job
 from scripts.gdrive_upload import upload_file_to_drive
 from scripts.ingest import find_cookie_file
 from scripts.smart_hook_detector import detect_viral_moments
+from scripts.dataset_logger import log_training_sample, DATASET_FILE
 from ai_studio_template import AI_STUDIO_HTML
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -478,6 +479,33 @@ def ai_studio():
     resp.headers["Expires"] = "0"
     return resp
 
+@app.get("/api/dataset/download")
+def download_training_dataset():
+    """Allows exporting the accumulated fine-tuning JSONL dataset file."""
+    if not DATASET_FILE.exists() or DATASET_FILE.stat().st_size == 0:
+        raise HTTPException(status_code=404, detail="No training dataset records collected yet.")
+    return FileResponse(
+        path=DATASET_FILE,
+        media_type="application/jsonl",
+        filename="training_dataset.jsonl"
+    )
+
+@app.get("/api/dataset/stats")
+def get_dataset_stats():
+    """Returns number of prompt/response pairs collected for training."""
+    count = 0
+    size_bytes = 0
+    if DATASET_FILE.exists():
+        size_bytes = DATASET_FILE.stat().st_size
+        with open(DATASET_FILE, "r", encoding="utf-8") as f:
+            count = sum(1 for line in f if line.strip())
+    return {
+        "total_training_samples": count,
+        "file_size_bytes": size_bytes,
+        "sheet_connected": Path("service_account.json").exists(),
+        "sheet_url": "https://docs.google.com/spreadsheets/d/1Bcbi86o-flI9J6uq4pg1H1tw1iCVXqu1sSZfZnBDMHU/edit?gid=0#gid=0"
+    }
+
 def call_ollama_completion(prompt: str, model: str = "deepseek-v4.1-flash", api_key: str = "", base_url: str = "https://ollama.com/v1") -> Dict[str, Any]:
     """Invokes Ollama or compatible LLM endpoint."""
     clean_base = base_url.rstrip("/")
@@ -563,6 +591,25 @@ Each item must have:
             ai_moments = calculate_clip_segments(duration, 4, req.url, title)
             used_provider = "Autonomous AI Engine (Ollama Smart Fallback)"
 
+        # Step 4: Autonomous Dataset Logging for Custom Model Fine-Tuning
+        try:
+            log_res = log_training_sample(
+                video_url=req.url,
+                video_title=title,
+                duration=float(duration),
+                model=req.model or "deepseek-v4.1-flash",
+                prompt_focus=req.prompt_focus or "viral_hooks",
+                system_prompt="You are an elite viral video editor and content strategist specializing in TikTok, YouTube Shorts, and Instagram Reels.",
+                user_prompt=prompt,
+                model_response_raw=raw_text if 'raw_text' in locals() else "",
+                moments=ai_moments,
+                provider=used_provider,
+                status="success" if not error_notice else "fallback"
+            )
+        except Exception as log_err:
+            logger.warning(f"Dataset logger notice: {log_err}")
+            log_res = {"logged_locally": False, "sheet_synced": False}
+
         return {
             "success": True,
             "video": {
@@ -573,6 +620,12 @@ Each item must have:
             },
             "provider": used_provider,
             "error_notice": error_notice,
+            "dataset": {
+                "logged": True,
+                "sheet_synced": log_res.get("sheet_synced", False),
+                "sheet_url": "https://docs.google.com/spreadsheets/d/1Bcbi86o-flI9J6uq4pg1H1tw1iCVXqu1sSZfZnBDMHU/edit?gid=0#gid=0",
+                "download_url": "/api/dataset/download"
+            },
             "moments": ai_moments
         }
     except Exception as e:
