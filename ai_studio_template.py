@@ -182,6 +182,59 @@ AI_STUDIO_HTML = """
             padding: 0 1.2rem 1.2rem;
             border-top: 1px solid rgba(168, 85, 247, 0.2);
         }
+        .cookie-accordion {
+            background: rgba(15, 23, 42, 0.7);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            margin-bottom: 1.5rem;
+            overflow: hidden;
+        }
+        .cookie-accordion-header {
+            padding: 0.85rem 1.2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            font-weight: 700;
+            font-size: 0.9rem;
+            color: #e2e8f0;
+        }
+        .cookie-accordion-body {
+            display: none;
+            padding: 0 1.2rem 1.2rem;
+            border-top: 1px solid var(--border);
+            background: rgba(0, 0, 0, 0.15);
+        }
+        .cookie-textarea {
+            width: 100%;
+            height: 90px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: #cbd5e1;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            padding: 0.75rem;
+            box-sizing: border-box;
+            margin: 0.75rem 0;
+        }
+        .cookie-btn {
+            padding: 0.5rem 1.1rem;
+            background: var(--accent-green);
+            color: #090d16;
+            border: none;
+            border-radius: 6px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .cookie-status-tag {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.6rem;
+            border-radius: 999px;
+            font-weight: 700;
+        }
+        .tag-active { background: rgba(34, 197, 94, 0.15); color: var(--accent-green); border: 1px solid rgba(34, 197, 94, 0.3); }
+        .tag-missing { background: rgba(234, 179, 8, 0.15); color: var(--accent-yellow); border: 1px solid rgba(234, 179, 8, 0.3); }
         .moment-card {
             background: var(--surface-card);
             border: 1px solid var(--border);
@@ -285,6 +338,32 @@ AI_STUDIO_HTML = """
             </div>
         </div>
 
+        <!-- Cookie Authentication Panel (Required on Cloud Hosts) -->
+        <div class="cookie-accordion">
+            <div class="cookie-accordion-header" id="cookieAccordionToggle">
+                <div style="display: flex; align-items: center; gap: 0.6rem;">
+                    <span>🍪 Cloud Server Authentication (YouTube Cookies)</span>
+                    <span id="cookieBadge" class="cookie-status-tag tag-missing">Checking...</span>
+                </div>
+                <span id="cookieAccordionIcon" style="color: var(--text-muted);">▼</span>
+            </div>
+            <div class="cookie-accordion-body" id="cookieAccordionBody">
+                <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 1rem;">
+                    <b>Why this is needed:</b> Commercial cloud servers (like Render) are blocked by YouTube without cookies. Pasting your browser's YouTube cookies bypasses bot detection 100%.
+                </p>
+                <ol style="font-size: 0.82rem; color: #cbd5e1; padding-left: 1.25rem; line-height: 1.6;">
+                    <li>Install free extension <b>Get cookies.txt locally</b> (Chrome/Edge/Firefox).</li>
+                    <li>Open <a href="https://www.youtube.com" target="_blank" style="color: var(--primary);">youtube.com</a> in your browser.</li>
+                    <li>Click the extension, copy exported cookies, and paste below:</li>
+                </ol>
+                <textarea id="cookiesInput" class="cookie-textarea" placeholder="# Netscape HTTP Cookie File&#10;.youtube.com&#9;TRUE&#9;/&#9;TRUE&#9;..."></textarea>
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                    <button type="button" id="btnSaveCookies" class="cookie-btn">Save Cookies to Server</button>
+                    <span id="cookieSaveMsg" style="font-size: 0.82rem;"></span>
+                </div>
+            </div>
+        </div>
+
         <div class="card">
             <form id="aiStudioForm">
                 <div class="form-group">
@@ -369,6 +448,75 @@ AI_STUDIO_HTML = """
 
         // Default OpenRouter free initialization
         ollamaKey.value = atob('c2stb3ItdjEtZGM1ZWMxZGE0ZDIyYjZiNDk1ZjAyYjQ4MjNmZmRkNzI1ZGRkMWY0YjJmMjE1NGM3ZjdkMzkxMDExMWQ5NTdhNw==');
+
+        // Cookie Authentication Panel logic
+        const cookieAccordionToggle = document.getElementById('cookieAccordionToggle');
+        const cookieAccordionBody = document.getElementById('cookieAccordionBody');
+        const cookieAccordionIcon = document.getElementById('cookieAccordionIcon');
+        const cookieBadge = document.getElementById('cookieBadge');
+        const cookiesInput = document.getElementById('cookiesInput');
+        const btnSaveCookies = document.getElementById('btnSaveCookies');
+        const cookieSaveMsg = document.getElementById('cookieSaveMsg');
+
+        cookieAccordionToggle.addEventListener('click', () => {
+            const isHidden = window.getComputedStyle(cookieAccordionBody).display === 'none';
+            cookieAccordionBody.style.display = isHidden ? 'block' : 'none';
+            cookieAccordionIcon.innerText = isHidden ? '▲' : '▼';
+        });
+
+        async function checkCookies() {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 6000);
+                const res = await fetch('/api/cookie-status', { signal: controller.signal });
+                clearTimeout(timeoutId);
+                if (!res.ok) throw new Error("Status " + res.status);
+                const data = await res.json();
+                if (data.has_cookies) {
+                    cookieBadge.innerText = '● Cookies Active';
+                    cookieBadge.className = 'cookie-status-tag tag-active';
+                } else {
+                    cookieBadge.innerText = '⚠️ No Cookies (Click to Setup)';
+                    cookieBadge.className = 'cookie-status-tag tag-missing';
+                }
+            } catch(e) {
+                cookieBadge.innerText = '⚠️ No Cookies (Click to Setup)';
+                cookieBadge.className = 'cookie-status-tag tag-missing';
+            }
+        }
+        checkCookies();
+        setInterval(checkCookies, 15000);
+
+        btnSaveCookies.addEventListener('click', async () => {
+            const text = cookiesInput.value.trim();
+            if (!text) {
+                cookieSaveMsg.innerHTML = '<span style="color:#ef4444;">Please paste cookies first</span>';
+                return;
+            }
+            btnSaveCookies.disabled = true;
+            btnSaveCookies.innerText = "Saving...";
+            try {
+                const res = await fetch('/api/save-cookies', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ cookies_text: text })
+                });
+                const d = await res.json();
+                if (d.success) {
+                    cookieSaveMsg.innerHTML = '<span style="color:#22c55e;">✅ Saved!</span>';
+                    cookieBadge.innerText = '● Cookies Active';
+                    cookieBadge.className = 'cookie-status-tag tag-active';
+                    cookiesInput.value = "";
+                } else {
+                    cookieSaveMsg.innerHTML = '<span style="color:#ef4444;">❌ Failed</span>';
+                }
+            } catch(e) {
+                cookieSaveMsg.innerText = "Error: " + e;
+            } finally {
+                btnSaveCookies.disabled = false;
+                btnSaveCookies.innerText = "Save Cookies to Server";
+            }
+        });
 
         configToggle.addEventListener('click', () => {
             const isHidden = window.getComputedStyle(configBody).display === 'none';
