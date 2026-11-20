@@ -21,6 +21,46 @@ DATASET_FILE = BASE_DIR / "training_dataset.jsonl"
 SERVICE_ACCOUNT_FILE = BASE_DIR / "service_account.json"
 DEFAULT_SPREADSHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "1Bcbi86o-flI9J6uq4pg1H1tw1iCVXqu1sSZfZnBDMHU")
 
+def get_sheet_credentials():
+    """Finds service account credentials from files or environment variables."""
+    try:
+        from google.oauth2 import service_account
+    except ImportError:
+        return None
+
+    candidates = [
+        SERVICE_ACCOUNT_FILE,
+        Path("service_account.json"),
+        Path("/etc/secrets/service_account.json"),
+    ]
+    for c in candidates:
+        if c.exists():
+            try:
+                return service_account.Credentials.from_service_account_file(
+                    str(c), scopes=['https://www.googleapis.com/auth/spreadsheets']
+                )
+            except Exception:
+                pass
+
+    for env_var in ["GOOGLE_SERVICE_ACCOUNT_JSON", "GDRIVE_SERVICE_ACCOUNT_JSON"]:
+        val = os.environ.get(env_var)
+        if val:
+            if os.path.isfile(val):
+                try:
+                    return service_account.Credentials.from_service_account_file(
+                        val, scopes=['https://www.googleapis.com/auth/spreadsheets']
+                    )
+                except Exception:
+                    pass
+            try:
+                info = json.loads(val)
+                return service_account.Credentials.from_service_account_info(
+                    info, scopes=['https://www.googleapis.com/auth/spreadsheets']
+                )
+            except Exception:
+                pass
+    return None
+
 def log_training_sample(
     video_url: str,
     video_title: str,
@@ -68,17 +108,13 @@ def log_training_sample(
     except Exception as fe:
         logger.warning(f"Could not append to local dataset file: {fe}")
 
-    # 3. Append row to Google Spreadsheet if service_account.json exists
+    # 3. Append row to Google Spreadsheet if credentials exist
     sheet_synced = False
-    if SERVICE_ACCOUNT_FILE.exists():
+    creds = get_sheet_credentials()
+    if creds:
         try:
-            from google.oauth2 import service_account
             from googleapiclient.discovery import build
 
-            creds = service_account.Credentials.from_service_account_file(
-                str(SERVICE_ACCOUNT_FILE),
-                scopes=['https://www.googleapis.com/auth/spreadsheets']
-            )
             service = build('sheets', 'v4', credentials=creds)
 
             row = [

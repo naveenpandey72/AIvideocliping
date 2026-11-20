@@ -42,7 +42,8 @@ RUN pip install --no-cache-dir -U pip setuptools wheel \
 
 # Copy application codebase
 COPY scripts/ ./scripts/
-COPY app.py .
+COPY *.py .
+COPY training_dataset.jsonl* ./
 
 # Create persistent/runtime directories
 RUN mkdir -p /app/temp_work /app/final_clips
