@@ -1156,7 +1156,7 @@ INDEX_HTML = """
                     <!-- Video Preview & Metadata Card -->
                     <div id="videoPreviewCard" class="video-preview-card">
                         <div id="videoPlaceholderIcon" class="video-icon-placeholder">🎬</div>
-                        <img id="videoThumb" class="video-thumb" src="" alt="Video Thumbnail" referrerpolicy="no-referrer">
+                        <img id="videoThumb" class="video-thumb" style="display: none;" src="" alt="" referrerpolicy="no-referrer">
                         <div style="flex-grow: 1; overflow: hidden;">
                             <div id="videoTitle" class="video-info-title">Analyzing stream...</div>
                             <div id="videoMeta" class="video-info-meta">Detecting resolutions and duration...</div>
@@ -1313,7 +1313,10 @@ INDEX_HTML = """
             // Check cookie status on load with graceful fallback
             async function checkCookies() {
                 try {
-                    const res = await fetch('/api/cookie-status');
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 6000);
+                    const res = await fetch('/api/cookie-status', { signal: controller.signal });
+                    clearTimeout(timeoutId);
                     if (!res.ok) throw new Error("Status " + res.status);
                     const data = await res.json();
                     if (data.has_cookies) {
@@ -1322,9 +1325,6 @@ INDEX_HTML = """
                     } else {
                         cookieBadge.innerText = '⚠️ No Cookies (Click to Setup)';
                         cookieBadge.className = 'cookie-status-tag tag-missing';
-                        // Auto-expand so user clearly sees the instructions and textarea
-                        accordionBody.style.display = 'block';
-                        accordionIcon.innerText = '▲';
                     }
                 } catch(e) {
                     cookieBadge.innerText = '⚠️ No Cookies (Click to Setup)';
@@ -1388,7 +1388,10 @@ INDEX_HTML = """
                 videoMeta.innerText = "Checking video streams and available resolutions...";
 
                 try {
-                    const res = await fetch(`/api/video-info?url=${encodeURIComponent(url)}`);
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 8000);
+                    const res = await fetch(`/api/video-info?url=${encodeURIComponent(url)}`, { signal: controller.signal });
+                    clearTimeout(timeoutId);
                     if (!res.ok) {
                         const errData = await res.json().catch(() => ({}));
                         throw new Error(errData.detail || "Could not fetch video info");
