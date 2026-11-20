@@ -293,6 +293,7 @@ AI_STUDIO_HTML = """
         <div class="nav-tabs">
             <a href="/" class="nav-tab-btn">⚡ Standard Clipper</a>
             <a href="/ai-studio" class="nav-tab-btn active">🤖 AI Studio (Ollama / LLM)</a>
+            <a href="/gta-auto-clipper" class="nav-tab-btn">🎮 GTA-Auto-Clipper</a>
         </div>
 
         <div class="header">

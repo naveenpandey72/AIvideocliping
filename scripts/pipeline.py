@@ -44,7 +44,9 @@ def run_job(
     duration: Optional[float] = None,
     model_name: str = "tiny",
     force_pillarbox: bool = False,
-    quality: Optional[str] = "2160"
+    quality: Optional[str] = "2160",
+    caption_style: str = "karaoke",
+    credit: Optional[str] = None
 ) -> Path:
     """Executes the full pipeline for a designated clip segment."""
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
@@ -102,8 +104,11 @@ def run_job(
         python_bin, str(SCRIPTS_DIR / "render_captions.py"),
         "--video", str(cropped_path),
         "--transcript", str(transcript_path),
-        "--output", str(final_output)
+        "--output", str(final_output),
+        "--caption-style", caption_style
     ]
+    if credit:
+        caption_cmd.extend(["--credit", str(credit)])
     run_step(caption_cmd, "Step 4/4: Burning Viral Karaoke Captions")
 
     # 5. Verification

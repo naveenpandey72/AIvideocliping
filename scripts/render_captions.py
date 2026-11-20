@@ -168,17 +168,43 @@ def render_short_deliverable(
     transcript_json: Path,
     final_output: Path,
     words_per_phrase: int = 3,
-    margin_v: int = 280
+    margin_v: int = 280,
+    caption_style: str = "karaoke",
+    credit: Optional[str] = None
 ) -> Path:
     """Generates ASS and burns into final MP4 deliverable."""
     temp_ass = final_output.parent / f"temp_{final_output.stem}.ass"
     try:
-        generate_karaoke_ass(
-            transcript_json=transcript_json,
-            output_ass=temp_ass,
-            words_per_phrase=words_per_phrase,
-            margin_v=margin_v
-        )
+        if caption_style == "gta_popup":
+            from scripts.gta_clipper_engine import write_gta_popup_ass
+            with open(transcript_json, "r", encoding="utf-8") as f:
+                tdata = json.load(f)
+            flat_words = []
+            for seg in tdata.get("segments", []):
+                for w in seg.get("words", []):
+                    flat_words.append({
+                        "word": w.get("word", ""),
+                        "start": float(w.get("start", 0)),
+                        "end": float(w.get("end", 0))
+                    })
+            duration = 60.0
+            if flat_words:
+                duration = flat_words[-1]["end"] + 1.0
+            write_gta_popup_ass(
+                path=temp_ass,
+                words=flat_words,
+                start=0.0,
+                length=duration,
+                credit=credit,
+                caption_margin_v=400
+            )
+        else:
+            generate_karaoke_ass(
+                transcript_json=transcript_json,
+                output_ass=temp_ass,
+                words_per_phrase=words_per_phrase,
+                margin_v=margin_v
+            )
         burn_captions_to_video(
             video_path=cropped_video,
             ass_path=temp_ass,
@@ -199,6 +225,8 @@ if __name__ == "__main__":
     parser.add_argument("--output", "-o", required=True, help="Final deliverable MP4 path")
     parser.add_argument("--margin-v", type=int, default=280, help="Bottom margin safe zone (default: 280)")
     parser.add_argument("--words-per-phrase", type=int, default=3, help="Words per subtitle line (default: 3)")
+    parser.add_argument("--caption-style", default="karaoke", help="Caption style: 'karaoke' or 'gta_popup'")
+    parser.add_argument("--credit", default=None, help="Creator watermark credit tag")
     args = parser.parse_args()
 
     out = render_short_deliverable(
@@ -206,6 +234,8 @@ if __name__ == "__main__":
         transcript_json=Path(args.transcript),
         final_output=Path(args.output),
         words_per_phrase=args.words_per_phrase,
-        margin_v=args.margin_v
+        margin_v=args.margin_v,
+        caption_style=args.caption_style,
+        credit=args.credit
     )
     print(f"SUCCESS: {out}")

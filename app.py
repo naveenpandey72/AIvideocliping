@@ -27,6 +27,7 @@ from scripts.ingest import find_cookie_file
 from scripts.smart_hook_detector import detect_viral_moments
 from scripts.dataset_logger import log_training_sample, DATASET_FILE
 from ai_studio_template import AI_STUDIO_HTML
+from gta_clipper_template import GTA_CLIPPER_HTML
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("UniversalClipperApp")
@@ -101,8 +102,17 @@ class ClipRequest(BaseModel):
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     duration: Optional[float] = None
+    credit: Optional[str] = None
     upload_to_gdrive: bool = False
     gdrive_folder_id: Optional[str] = None
+
+class GtaAnalyzeRequest(BaseModel):
+    url: str
+    gameplay_confirmed: bool = True
+    clip_len: int = 30
+    layout: str = "fill"
+    caption_style: str = "popup_yellow"
+    credit: Optional[str] = None
 
 class CookiesRequest(BaseModel):
     cookies_text: str
@@ -374,7 +384,9 @@ def execute_multi_clip_job(job_id: str, req: ClipRequest):
                 end_time=str(seg["end"]),
                 model_name="tiny",
                 force_pillarbox=pillarbox,
-                quality=req.video_quality
+                quality=req.video_quality,
+                caption_style=req.captions_mode,
+                credit=req.credit
             )
 
             clip_data = {
@@ -478,6 +490,127 @@ def ai_studio():
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
     return resp
+
+@app.get("/gta-auto-clipper", response_class=HTMLResponse)
+def gta_auto_clipper():
+    resp = HTMLResponse(content=GTA_CLIPPER_HTML)
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+@app.post("/api/gta/analyze")
+async def analyze_gta_stream(req: GtaAnalyzeRequest):
+    """GTA gameplay highlight discovery based on GTA-Auto-Clipper & OpenRouter Free reasoning."""
+    if not req.gameplay_confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail="Visual gameplay confirmation required: Please confirm you visually checked that actual GTA gameplay is visible on screen."
+        )
+
+    try:
+        meta = fetch_video_metadata(req.url)
+        title = meta.get("title", "GTA Gameplay Stream")
+        duration = meta.get("duration", 600)
+        dur_fmt = meta.get("duration_formatted", "10:00")
+
+        gta_prompt = f'''
+You are an expert GTA gameplay clipping assistant based on GTA-Auto-Clipper.
+Analyze this GTA video stream and identify the highest-energy gameplay moments:
+Video Title: "{title}"
+Total Duration: {dur_fmt} ({duration} seconds)
+Target Format: 9:16 Full-screen Vertical Short (Clip length: {req.clip_len}s, with 6-second lead-in before peak moment)
+Method: High-energy chat reaction bursts, wild police chases, explosive crashes, stunts, or insane gameplay fails.
+
+Instructions:
+Extract the top 3-4 distinct high-energy GTA highlights.
+Each moment should start approximately 6 seconds before the action peak.
+Respond strictly in valid JSON format with a list named "moments".
+Each item must have:
+- "title": (Catchy GTA short title with emojis, max 60 chars)
+- "start": (start timestamp in seconds as float/int, must be between 0 and {duration})
+- "end": (end timestamp in seconds, exactly start + {req.clip_len}s)
+- "hook": (Spoken opening hook or reaction line)
+- "reason": (Why this GTA gameplay moment is viral)
+- "hashtags": (List of 5 trending GTA hashtags, e.g. ["#GTA6", "#GTAV", "#GamingShorts", "#RockstarGames", "#ViceCity"])
+- "score": (Score from 88 to 99)
+'''
+        ai_moments = []
+        used_provider = "OpenRouter Free (openrouter/free)"
+        error_notice = None
+        raw_text = ""
+
+        try:
+            res = call_ollama_completion(
+                prompt=gta_prompt,
+                model="openrouter/free",
+                api_key=OPENROUTER_DEFAULT_KEY,
+                base_url="https://openrouter.ai/api/v1"
+            )
+            raw_text = res["content"]
+            if "```json" in raw_text:
+                json_str = raw_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in raw_text:
+                json_str = raw_text.split("```")[1].split("```")[0].strip()
+            else:
+                json_str = raw_text.strip()
+            parsed = json.loads(json_str)
+            if isinstance(parsed, list):
+                ai_moments = parsed
+            elif isinstance(parsed, dict):
+                ai_moments = (
+                    parsed.get("moments")
+                    or parsed.get("key_moments")
+                    or parsed.get("viral_moments")
+                    or parsed.get("clips")
+                    or []
+                )
+            for m in ai_moments:
+                m["start"] = normalize_timestamp(m.get("start"), 10.0)
+                m["end"] = normalize_timestamp(m.get("end"), m["start"] + req.clip_len)
+                if "score" not in m:
+                    m["score"] = 94.0
+            used_provider = res.get("provider", "OpenRouter Free (openrouter/free)")
+        except Exception as oe:
+            logger.warning(f"OpenRouter GTA analysis fallback ({oe}). Using intelligent GTA heuristic generator.")
+            error_notice = str(oe)
+            ai_moments = calculate_clip_segments(duration, 4, req.url, title)
+            used_provider = "Autonomous GTA Engine (Heuristic Fallback)"
+            raw_text = json.dumps({"moments": ai_moments}, indent=2)
+
+        # Log training sample
+        try:
+            log_res = log_training_sample(
+                video_url=req.url,
+                video_title=title,
+                duration=float(duration),
+                model="openrouter/free",
+                prompt_focus="gta_auto_clipper",
+                system_prompt="You are an expert GTA gameplay clipping assistant based on GTA-Auto-Clipper.",
+                user_prompt=gta_prompt,
+                model_response_raw=raw_text,
+                moments=ai_moments,
+                provider=used_provider,
+                status="success" if not error_notice else "fallback"
+            )
+        except Exception as le:
+            logger.warning(f"Dataset logger notice: {le}")
+
+        return {
+            "success": True,
+            "video": {
+                "title": title,
+                "duration": duration,
+                "duration_formatted": dur_fmt,
+                "thumbnail": meta.get("thumbnail")
+            },
+            "provider": used_provider,
+            "error_notice": error_notice,
+            "moments": ai_moments
+        }
+    except Exception as e:
+        logger.error(f"GTA analyze failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/api/dataset/download")
 def download_training_dataset():
@@ -1190,6 +1323,7 @@ INDEX_HTML = """
             <div class="nav-tabs">
                 <a href="/" class="nav-tab-btn active">⚡ Standard Clipper</a>
                 <a href="/ai-studio" class="nav-tab-btn">🤖 AI Studio (Ollama / LLM)</a>
+                <a href="/gta-auto-clipper" class="nav-tab-btn">🎮 GTA-Auto-Clipper</a>
             </div>
 
             <div class="header">
