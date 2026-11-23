@@ -572,22 +572,44 @@ GTA_CLIPPER_HTML = """<!DOCTYPE html>
                         <span>⏱️ ${m.start}s - ${m.end}s (${dur}s duration • Starts 6s before reaction)</span>
                         <span>🏷️ ${(m.hashtags || ['#GTA6', '#GTAV', '#GamingShorts']).join(' ')}</span>
                     </div>
-                    <button type="button" class="btn-render-moment" onclick="renderGtaMoment('${encodeURIComponent(JSON.stringify(m))}')">
-                        <span>⚡ Render This 9:16 GTA Short (Pop-up Yellow Subtitles)</span>
-                    </button>
+                    <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-top: 0.5rem;">
+                        <button type="button" class="btn-render-moment">
+                            <span>⚡ Render This 9:16 GTA Short (Pop-up Yellow Subtitles)</span>
+                        </button>
+                        <span class="moment-status-indicator" style="font-size: 0.85rem; font-weight: 700;"></span>
+                    </div>
                 `;
                 momentsList.appendChild(card);
+
+                const btn = card.querySelector('.btn-render-moment');
+                const statusSpan = card.querySelector('.moment-status-indicator');
+                btn.addEventListener('click', () => {
+                    renderGtaMoment(m, btn, statusSpan);
+                });
             });
         }
 
-        async function renderGtaMoment(encodedMoment) {
-            const m = JSON.parse(decodeURIComponent(encodedMoment));
-            const url = document.getElementById('videoUrl').value.trim();
+        async function renderGtaMoment(m, btn, statusSpan) {
+            const urlInput = document.getElementById('videoUrl');
+            const url = urlInput ? urlInput.value.trim() : "";
             const layout = document.getElementById('layoutMode').value;
             const captionStyle = document.getElementById('captionStyle').value;
             const credit = document.getElementById('creditTag').value.trim();
 
+            if (!url) {
+                alert("Please enter a valid YouTube Video URL.");
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = `<span>⏳ Rendering Short...</span>`;
+            if (statusSpan) {
+                statusSpan.style.color = "var(--gta-cyan)";
+                statusSpan.innerText = "⏳ Pipeline queued...";
+            }
+
             gtaConsole.style.display = "block";
+            gtaConsole.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             gtaStatusIndicator.innerText = "● QUEUED";
             gtaStatusIndicator.style.color = "var(--gta-cyan)";
             gtaConsoleLogs.innerText = `Submitting GTA clip "${m.title}" (${m.start}s - ${m.end}s)...`;
@@ -617,15 +639,21 @@ GTA_CLIPPER_HTML = """<!DOCTYPE html>
                 }
 
                 const job = await res.json();
-                pollGtaJob(job.job_id, m.title);
+                pollGtaJob(job.job_id, m.title, btn, statusSpan);
             } catch(e) {
+                btn.disabled = false;
+                btn.innerHTML = `<span>⚡ Retry Render</span>`;
+                if (statusSpan) {
+                    statusSpan.style.color = "#ef4444";
+                    statusSpan.innerText = "❌ " + e.message;
+                }
                 gtaConsoleLogs.innerText = "Error: " + e.message;
                 gtaStatusIndicator.innerText = "● FAILED";
                 gtaStatusIndicator.style.color = "#ef4444";
             }
         }
 
-        function pollGtaJob(jobId, title) {
+        function pollGtaJob(jobId, title, btn, statusSpan) {
             gtaJobIdText.innerText = "Job ID: " + jobId.slice(0, 8);
             gtaStatusIndicator.innerText = "● RENDERING";
             gtaStatusIndicator.style.color = "var(--gta-yellow)";
@@ -647,11 +675,25 @@ GTA_CLIPPER_HTML = """<!DOCTYPE html>
 
                         const clip = (job.clips || [])[0];
                         if (clip) {
+                            btn.disabled = false;
+                            btn.style.background = "var(--accent-green)";
+                            btn.innerHTML = `<span>⬇️ Download Short</span>`;
+                            btn.onclick = () => window.open(clip.download_url, '_blank');
+                            if (statusSpan) {
+                                statusSpan.style.color = "var(--accent-green)";
+                                statusSpan.innerHTML = `✅ Ready! <a href="${clip.download_url}" target="_blank" style="color:var(--gta-cyan); font-weight:bold;">Download Clip</a>`;
+                            }
                             gtaConsoleLogs.innerText += String.fromCharCode(10) + `🎉 Success! Click to download: ${clip.download_url}`;
                             window.open(clip.download_url, '_blank');
                         }
                     } else if (job.status === 'failed') {
                         clearInterval(interval);
+                        btn.disabled = false;
+                        btn.innerHTML = `<span>⚡ Retry Render</span>`;
+                        if (statusSpan) {
+                            statusSpan.style.color = "#ef4444";
+                            statusSpan.innerText = "❌ " + (job.error || "Rendering failed");
+                        }
                         gtaStatusIndicator.innerText = "● FAILED";
                         gtaStatusIndicator.style.color = "#ef4444";
                         gtaStatusIndicator.classList.remove('pulse');

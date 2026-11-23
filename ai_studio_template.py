@@ -648,20 +648,42 @@ AI_STUDIO_HTML = """
                         <span>⏱️ ${m.start}s - ${m.end}s (${dur}s duration)</span>
                         <span>🏷️ ${(m.hashtags || []).join(' ')}</span>
                     </div>
-                    <button type="button" class="btn-render-moment" onclick="renderSingleMoment('${encodeURIComponent(JSON.stringify(m))}')">
-                        <span>⚡ Render This 9:16 Short Now</span>
-                    </button>
+                    <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-top: 0.5rem;">
+                        <button type="button" class="btn-render-moment">
+                            <span>⚡ Render This 9:16 Short Now</span>
+                        </button>
+                        <span class="moment-status-indicator" style="font-size: 0.85rem; font-weight: 700;"></span>
+                    </div>
                 `;
                 momentsList.appendChild(card);
+
+                const btn = card.querySelector('.btn-render-moment');
+                const statusSpan = card.querySelector('.moment-status-indicator');
+                btn.addEventListener('click', () => {
+                    renderSingleMoment(m, btn, statusSpan);
+                });
             });
         }
 
-        async function renderSingleMoment(encodedMoment) {
-            const m = JSON.parse(decodeURIComponent(encodedMoment));
-            const url = document.getElementById('aiVideoUrl').value.trim();
+        async function renderSingleMoment(m, btn, statusSpan) {
+            const urlInput = document.getElementById('aiVideoUrl');
+            const url = urlInput ? urlInput.value.trim() : "";
             const framing = document.getElementById('framingStyle').value;
 
+            if (!url) {
+                alert("Please enter a valid YouTube Video URL.");
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = `<span>⏳ Processing Short...</span>`;
+            if (statusSpan) {
+                statusSpan.style.color = "var(--primary)";
+                statusSpan.innerText = "⏳ Submitting to pipeline...";
+            }
+
             aiConsole.style.display = "block";
+            aiConsole.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             aiStatusIndicator.innerText = "● QUEUED";
             aiStatusIndicator.style.color = "var(--primary)";
             aiConsoleLogs.innerText = `Submitting clip "${m.title}" (${m.start}s - ${m.end}s)...`;
@@ -683,16 +705,26 @@ AI_STUDIO_HTML = """
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify(payload)
                 });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || "Clip submission failed");
+                }
                 const job = await res.json();
-                pollAiJob(job.job_id, m.title);
+                pollAiJob(job.job_id, m.title, btn, statusSpan);
             } catch(e) {
+                btn.disabled = false;
+                btn.innerHTML = `<span>⚡ Retry Render</span>`;
+                if (statusSpan) {
+                    statusSpan.style.color = "#ef4444";
+                    statusSpan.innerText = "❌ " + e.message;
+                }
                 aiConsoleLogs.innerText = "Error: " + e.message;
                 aiStatusIndicator.innerText = "● FAILED";
                 aiStatusIndicator.style.color = "#ef4444";
             }
         }
 
-        function pollAiJob(jobId, title) {
+        function pollAiJob(jobId, title, btn, statusSpan) {
             aiJobIdText.innerText = "Job ID: " + jobId.slice(0, 8);
             aiStatusIndicator.innerText = "● RENDERING";
             aiStatusIndicator.style.color = "var(--accent-yellow)";
@@ -714,11 +746,25 @@ AI_STUDIO_HTML = """
 
                         const clip = (job.clips || [])[0];
                         if (clip) {
+                            btn.disabled = false;
+                            btn.style.background = "var(--accent-green)";
+                            btn.innerHTML = `<span>⬇️ Download Short</span>`;
+                            btn.onclick = () => window.open(clip.download_url, '_blank');
+                            if (statusSpan) {
+                                statusSpan.style.color = "var(--accent-green)";
+                                statusSpan.innerHTML = `✅ Ready! <a href="${clip.download_url}" target="_blank" style="color:var(--primary); font-weight:bold;">Download Clip</a>`;
+                            }
                             aiConsoleLogs.innerText += String.fromCharCode(10) + `🎉 Success! Click to download: ${clip.download_url}`;
                             window.open(clip.download_url, '_blank');
                         }
                     } else if (job.status === 'failed') {
                         clearInterval(interval);
+                        btn.disabled = false;
+                        btn.innerHTML = `<span>⚡ Retry Render</span>`;
+                        if (statusSpan) {
+                            statusSpan.style.color = "#ef4444";
+                            statusSpan.innerText = "❌ " + (job.error || "Rendering failed");
+                        }
                         aiStatusIndicator.innerText = "● FAILED";
                         aiStatusIndicator.style.color = "#ef4444";
                         aiStatusIndicator.classList.remove('pulse');
