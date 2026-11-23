@@ -5,6 +5,7 @@ venv/
 
 # Secrets & Credentials (DO NOT COMMIT TO PUBLIC REPO)
 service_account.json
+cookies.txt
 *.pem
 *.key
 .env

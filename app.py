@@ -191,24 +191,35 @@ def fetch_video_metadata(url: str) -> Dict[str, Any]:
         except Exception as oe:
             logger.warning(f"Fast oEmbed lookup notice: {oe}")
 
-    # 2. Fast yt-dlp inspection (only if cookies are present; otherwise oEmbed already has title & thumbnail in 200ms)
+    # 2. Fast yt-dlp inspection (tries with cookies first if present, falls back to flat extraction)
     info = None
     cookie_file = find_cookie_file()
-    if cookie_file and cookie_file.exists():
-        try:
-            ydl_opts = {
-                'quiet': True,
-                'skip_download': True,
-                'no_warnings': True,
-                'socket_timeout': 3,
-                'retries': 0,
-                'cookiefile': str(cookie_file),
-                'nocheckcertificate': True
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-        except Exception as ye:
-            logger.warning(f"yt-dlp quick probe notice: {ye}")
+    try:
+        ydl_opts = {
+            'quiet': True,
+            'skip_download': True,
+            'extract_flat': True,
+            'no_warnings': True,
+            'socket_timeout': 6,
+            'retries': 1,
+            'nocheckcertificate': True
+        }
+        if cookie_file and cookie_file.exists():
+            ydl_opts['cookiefile'] = str(cookie_file)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if info:
+                duration_sec = int(info.get('duration') or 0)
+                title = info.get('title') or title
+                if info.get('thumbnail'):
+                    thumbnail = info.get('thumbnail')
+    except Exception as ye:
+        logger.warning(f"yt-dlp quick probe notice: {ye}")
+
+    # Fallback to standard 15-min stream estimate if duration remains unknown (never leave duration 0!)
+    if not duration_sec or duration_sec <= 0:
+        duration_sec = 900
+        logger.info("Video duration auto-set to 900s default estimate for moment spacing.")
 
     # 3. Assemble metadata & qualities
     heights = []
@@ -544,8 +555,10 @@ async def analyze_gta_stream(req: GtaAnalyzeRequest):
     try:
         meta = fetch_video_metadata(req.url)
         title = meta.get("title", "GTA Gameplay Stream")
-        duration = meta.get("duration", 600)
-        dur_fmt = meta.get("duration_formatted", "10:00")
+        duration = int(meta.get("duration") or 900)
+        if duration <= 30:
+            duration = 900
+        dur_fmt = f"{duration // 60}:{duration % 60:02d}"
 
         gta_prompt = f'''
 You are an expert GTA gameplay clipping assistant based on GTA-Auto-Clipper.
@@ -556,12 +569,13 @@ Target Format: 9:16 Full-screen Vertical Short (Clip length: {req.clip_len}s, wi
 Method: High-energy chat reaction bursts, wild police chases, explosive crashes, stunts, or insane gameplay fails.
 
 Instructions:
-Extract the top 3-4 distinct high-energy GTA highlights.
-Each moment should start approximately 6 seconds before the action peak.
+Extract the top 3-4 distinct high-energy GTA highlights from DIFFERENT parts of the gameplay stream.
+MANDATORY REQUIREMENT: Each moment MUST have a completely different, unique start timestamp distributed across the entire duration (0 to {duration} seconds).
+For example: Moment 1 early in video, Moment 2 mid-game, Moment 3 late game/climax. Never set all moments to start at 0s!
 Respond strictly in valid JSON format with a list named "moments".
 Each item must have:
 - "title": (Catchy GTA short title with emojis, max 60 chars)
-- "start": (start timestamp in seconds as float/int, must be between 0 and {duration})
+- "start": (start timestamp in seconds as float/int, must be between 0 and {duration - req.clip_len})
 - "end": (end timestamp in seconds, exactly start + {req.clip_len}s)
 - "hook": (Spoken opening hook or reaction line)
 - "reason": (Why this GTA gameplay moment is viral)
@@ -598,11 +612,22 @@ Each item must have:
                     or parsed.get("clips")
                     or []
                 )
-            for m in ai_moments:
-                m["start"] = normalize_timestamp(m.get("start"), 10.0)
-                m["end"] = normalize_timestamp(m.get("end"), m["start"] + req.clip_len)
+            seen_starts = []
+            num_m = len(ai_moments) or 3
+            for idx, m in enumerate(ai_moments):
+                raw_s = normalize_timestamp(m.get("start"), 0.0)
+                # Prevent duplicate timestamps (e.g. LLM giving start=0 to multiple moments)
+                is_duplicate = any(abs(raw_s - prev) < 25.0 for prev in seen_starts) or (raw_s == 0.0 and idx > 0)
+                if is_duplicate or raw_s >= duration:
+                    spacing = max(35.0, (duration - 60.0) / max(num_m, 1))
+                    s = round(min(max(15.0, 15.0 + (idx * spacing)), duration - req.clip_len - 5.0), 1)
+                else:
+                    s = raw_s
+                seen_starts.append(s)
+                m["start"] = s
+                m["end"] = round(min(s + req.clip_len, float(duration)), 1)
                 if "score" not in m:
-                    m["score"] = 94.0
+                    m["score"] = 96.0 - (idx * 2.0)
             used_provider = res.get("provider", "OpenRouter Free (openrouter/free)")
         except Exception as oe:
             logger.warning(f"OpenRouter GTA analysis fallback ({oe}). Using intelligent GTA heuristic generator.")
@@ -764,8 +789,10 @@ async def analyze_video_with_ollama(req: OllamaAnalyzeRequest):
     try:
         meta = fetch_video_metadata(req.url)
         title = meta.get("title", "Video Stream")
-        duration = meta.get("duration", 600)
-        dur_fmt = meta.get("duration_formatted", "10:00")
+        duration = int(meta.get("duration") or 900)
+        if duration <= 30:
+            duration = 900
+        dur_fmt = f"{duration // 60}:{duration % 60:02d}"
         
         system_instruction = req.custom_instruction or "Find the 4 highest-retention, most viral moments in this video. Provide exact start and end timestamps (between 25 and 55 seconds each), irresistible curiosity hooks, catchy titles with emojis, and trending hashtags."
         
@@ -777,11 +804,12 @@ Target Format: 9:16 Vertical Shorts (25s - 55s per clip)
 Focus: {req.prompt_focus}
 
 Instructions: {system_instruction}
+MANDATORY REQUIREMENT: Extract 3-4 distinct moments from DIFFERENT parts of the video (e.g. beginning, middle, peak, conclusion). Each moment MUST have a completely unique, non-overlapping start timestamp spread across the entire duration (0 to {duration} seconds). Do NOT start all moments at 0s!
 
 Respond strictly in valid JSON format with a list named "moments".
 Each item must have:
 - "title": (Punchy viral title with emojis, max 60 chars)
-- "start": (start timestamp in seconds as float/int, must be between 0 and {duration})
+- "start": (start timestamp in seconds as float/int, must be between 0 and {duration - 45})
 - "end": (end timestamp in seconds as float/int, 25-55s after start)
 - "hook": (Spoken opening hook that keeps viewers watching)
 - "reason": (Why this moment will blow up on Reels/Shorts)
@@ -824,11 +852,23 @@ Each item must have:
                         or parsed.get("clips")
                         or []
                     )
-                for m in ai_moments:
-                    m["start"] = normalize_timestamp(m.get("start"), 10.0)
-                    m["end"] = normalize_timestamp(m.get("end"), m["start"] + 35.0)
+                seen_starts = []
+                num_m = len(ai_moments) or 4
+                for idx, m in enumerate(ai_moments):
+                    raw_s = normalize_timestamp(m.get("start"), 0.0)
+                    is_duplicate = any(abs(raw_s - prev) < 25.0 for prev in seen_starts) or (raw_s == 0.0 and idx > 0)
+                    if is_duplicate or raw_s >= duration:
+                        spacing = max(40.0, (duration - 60.0) / max(num_m, 1))
+                        s = round(min(max(15.0, 15.0 + (idx * spacing)), duration - 45.0), 1)
+                    else:
+                        s = raw_s
+                    seen_starts.append(s)
+                    clip_len = normalize_timestamp(m.get("end"), s + 35.0) - raw_s
+                    clip_len = max(25.0, min(55.0, clip_len if clip_len > 10 else 35.0))
+                    m["start"] = s
+                    m["end"] = round(min(s + clip_len, float(duration)), 1)
                     if "score" not in m:
-                        m["score"] = 92.0
+                        m["score"] = 94.0 - (idx * 2.0)
                 used_provider = f"{res.get('provider', req.model)}"
             except Exception as oe:
                 err_msg = str(oe)
