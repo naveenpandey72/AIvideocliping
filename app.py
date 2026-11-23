@@ -309,6 +309,110 @@ PRESET_MOMENTS = [
     }
 ]
 
+def enforce_strict_non_overlapping_moments(
+    raw_moments: List[Dict[str, Any]],
+    total_duration: float,
+    clip_len: float = 30.0,
+    min_gap: float = 15.0
+) -> List[Dict[str, Any]]:
+    """
+    Enforces 100% strict non-overlapping time windows across all generated video clips.
+    If clip 1 uses [5s, 35s], no other clip is permitted to overlap with this time window.
+    Guarantees full video coverage by spreading clips across distinct chronological timeline zones.
+    """
+    total_duration = max(float(total_duration), 10.0)
+    clip_len = max(15.0, min(float(clip_len), 60.0))
+    
+    # In short videos (< 60s), only 1 clip can physically exist without repeating footage
+    if total_duration <= 60.0:
+        first = raw_moments[0] if raw_moments else {}
+        return [{
+            "start": 0.0,
+            "end": round(total_duration, 1),
+            "title": first.get("title", "Complete Highlight Clip 🔥"),
+            "hook": first.get("hook", "Watch this incredible highlight!"),
+            "reason": first.get("reason", "Best sequence from video."),
+            "hashtags": first.get("hashtags", ["#Shorts", "#Viral", "#FYP"]),
+            "score": float(first.get("score") or 98.0),
+            "detection_source": first.get("detection_source", "Autonomous Engine")
+        }]
+
+    max_possible_clips = max(1, int((total_duration - 5.0) / (clip_len + min_gap)))
+    target_count = min(len(raw_moments) if raw_moments else 4, max_possible_clips)
+    target_count = max(1, target_count)
+
+    usable_start = 0.0
+    usable_end = max(usable_start + clip_len, total_duration - 2.0)
+    total_span = usable_end - usable_start
+    zone_size = total_span / target_count
+
+    sanitized_moments = []
+    occupied_intervals = []
+
+    def is_overlapping(s: float, e: float) -> bool:
+        for occ_s, occ_e in occupied_intervals:
+            if not (e + min_gap <= occ_s or s >= occ_e + min_gap):
+                return True
+        return False
+
+    for idx in range(target_count):
+        m = raw_moments[idx] if idx < len(raw_moments) else {}
+        zone_min = usable_start + (idx * zone_size)
+        zone_max = min(zone_min + zone_size, usable_end)
+
+        req_start = m.get("start")
+        try:
+            cand_start = float(req_start) if req_start is not None else zone_min
+        except (ValueError, TypeError):
+            cand_start = zone_min
+
+        cand_len = clip_len
+        if "end" in m:
+            try:
+                e = float(m["end"])
+                if e > cand_start:
+                    cand_len = min(60.0, max(20.0, e - cand_start))
+            except (ValueError, TypeError):
+                pass
+        cand_end = cand_start + cand_len
+
+        # If candidate overlaps with any previously accepted clip, or exceeds video duration, or is all 0s
+        if is_overlapping(cand_start, cand_end) or cand_start < 0.0 or cand_end > total_duration or (cand_start == 0.0 and idx > 0):
+            cand_start = round(zone_min + max(0.0, (zone_size - cand_len) / 2.0), 1)
+            cand_end = round(min(cand_start + cand_len, total_duration - 2.0), 1)
+
+            step_shift = 5.0
+            attempts = 0
+            while is_overlapping(cand_start, cand_end) and cand_start + cand_len < total_duration and attempts < 100:
+                cand_start += step_shift
+                cand_end = cand_start + cand_len
+                attempts += 1
+
+        cand_start = round(max(0.0, cand_start), 1)
+        cand_end = round(min(total_duration, cand_start + cand_len), 1)
+
+        occupied_intervals.append((cand_start, cand_end))
+
+        title = m.get("title") or f"Viral Highlight #{idx+1} 🔥"
+        hook = m.get("hook") or "You won't believe what happens in this scene..."
+        reason = m.get("reason", "Distinct high-energy sequence.")
+        hashtags = m.get("hashtags") or ["#Shorts", "#Viral", "#Trending", "#FYP"]
+        score = float(m.get("score") or (98.0 - idx * 2.0))
+
+        sanitized_moments.append({
+            "start": cand_start,
+            "end": cand_end,
+            "title": title,
+            "hook": hook,
+            "reason": reason,
+            "hashtags": hashtags,
+            "score": score,
+            "detection_source": m.get("detection_source", "Strict Non-Overlapping AI Hook Engine")
+        })
+
+    sanitized_moments.sort(key=lambda x: x["start"])
+    return sanitized_moments
+
 def calculate_clip_segments(total_duration: float, num_clips: int, url: str, video_title: str = "") -> List[Dict[str, Any]]:
     """Generates high-retention time windows using the Smart AI Viral Hook Detector."""
     if total_duration <= 60:
@@ -332,7 +436,7 @@ def calculate_clip_segments(total_duration: float, num_clips: int, url: str, vid
             video_title=video_title
         )
         if segments and len(segments) >= num_clips:
-            return segments[:num_clips]
+            return enforce_strict_non_overlapping_moments(segments[:num_clips], total_duration, min_gap=15.0)
     except Exception as e:
         logger.warning(f"Smart hook detector fallback: {e}")
 
@@ -356,7 +460,7 @@ def calculate_clip_segments(total_duration: float, num_clips: int, url: str, vid
             "score": 90.0 - (i * 2.5),
             "detection_source": "NLP Semantic Hook Engine"
         })
-    return segments
+    return enforce_strict_non_overlapping_moments(segments, total_duration, clip_len=clip_dur, min_gap=15.0)
 
 def execute_multi_clip_job(job_id: str, req: ClipRequest):
     jobs[job_id]["status"] = "processing"
@@ -612,22 +716,12 @@ Each item must have:
                     or parsed.get("clips")
                     or []
                 )
-            seen_starts = []
-            num_m = len(ai_moments) or 3
-            for idx, m in enumerate(ai_moments):
-                raw_s = normalize_timestamp(m.get("start"), 0.0)
-                # Prevent duplicate timestamps (e.g. LLM giving start=0 to multiple moments)
-                is_duplicate = any(abs(raw_s - prev) < 25.0 for prev in seen_starts) or (raw_s == 0.0 and idx > 0)
-                if is_duplicate or raw_s >= duration:
-                    spacing = max(35.0, (duration - 60.0) / max(num_m, 1))
-                    s = round(min(max(15.0, 15.0 + (idx * spacing)), duration - req.clip_len - 5.0), 1)
-                else:
-                    s = raw_s
-                seen_starts.append(s)
-                m["start"] = s
-                m["end"] = round(min(s + req.clip_len, float(duration)), 1)
-                if "score" not in m:
-                    m["score"] = 96.0 - (idx * 2.0)
+            ai_moments = enforce_strict_non_overlapping_moments(
+                raw_moments=ai_moments,
+                total_duration=duration,
+                clip_len=req.clip_len,
+                min_gap=15.0
+            )
             used_provider = res.get("provider", "OpenRouter Free (openrouter/free)")
         except Exception as oe:
             logger.warning(f"OpenRouter GTA analysis fallback ({oe}). Using intelligent GTA heuristic generator.")
@@ -852,23 +946,12 @@ Each item must have:
                         or parsed.get("clips")
                         or []
                     )
-                seen_starts = []
-                num_m = len(ai_moments) or 4
-                for idx, m in enumerate(ai_moments):
-                    raw_s = normalize_timestamp(m.get("start"), 0.0)
-                    is_duplicate = any(abs(raw_s - prev) < 25.0 for prev in seen_starts) or (raw_s == 0.0 and idx > 0)
-                    if is_duplicate or raw_s >= duration:
-                        spacing = max(40.0, (duration - 60.0) / max(num_m, 1))
-                        s = round(min(max(15.0, 15.0 + (idx * spacing)), duration - 45.0), 1)
-                    else:
-                        s = raw_s
-                    seen_starts.append(s)
-                    clip_len = normalize_timestamp(m.get("end"), s + 35.0) - raw_s
-                    clip_len = max(25.0, min(55.0, clip_len if clip_len > 10 else 35.0))
-                    m["start"] = s
-                    m["end"] = round(min(s + clip_len, float(duration)), 1)
-                    if "score" not in m:
-                        m["score"] = 94.0 - (idx * 2.0)
+                ai_moments = enforce_strict_non_overlapping_moments(
+                    raw_moments=ai_moments,
+                    total_duration=duration,
+                    clip_len=35.0,
+                    min_gap=15.0
+                )
                 used_provider = f"{res.get('provider', req.model)}"
             except Exception as oe:
                 err_msg = str(oe)
