@@ -3,6 +3,8 @@ FROM python:3.11-slim
 # Avoid interactive prompts during apt install
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
+ENV MALLOC_ARENA_MAX=2
+ENV OMP_NUM_THREADS=2
 
 # Install FFmpeg with libass support, NodeJS (for yt-dlp JS challenge deciphering), and font/OpenCV dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

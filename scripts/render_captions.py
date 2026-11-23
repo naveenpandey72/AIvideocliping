@@ -149,10 +149,10 @@ def burn_captions_to_video(
     escaped_ass = str(ass_path.resolve()).replace("\\", "/").replace(":", "\\:")
     cmd = [
         ffmpeg_cmd, "-y", "-hide_banner", "-loglevel", "error",
+        "-threads", "2",
         "-i", str(video_path),
         "-vf", f"ass='{escaped_ass}'",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-        "-r", "60",
         "-c:a", "aac", "-b:a", "192k",
         "-pix_fmt", "yuv420p",
         "-movflags", "+faststart",

@@ -98,7 +98,7 @@ class ClipRequest(BaseModel):
     num_clips: int = 6
     framing_mode: str = "auto"
     captions_mode: str = "karaoke"
-    video_quality: str = "2160"
+    video_quality: str = "1080"
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     duration: Optional[float] = None

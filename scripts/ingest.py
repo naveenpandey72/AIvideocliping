@@ -89,6 +89,7 @@ def ingest_video(
             elif duration is not None:
                 cmd.extend(["-t", str(duration)])
             cmd.extend([
+                "-threads", "2",
                 "-i", str(source_path),
                 "-filter_complex", "[0:v]setpts=PTS-STARTPTS[v];[0:a]asetpts=PTS-STARTPTS[a]",
                 "-map", "[v]", "-map", "[a]",
@@ -107,7 +108,11 @@ def ingest_video(
     logger.info(f"Ingesting remote stream from: {source}")
 
     cookie_file = find_cookie_file()
-    max_h = int(quality) if quality and quality.isdigit() else 2160
+    max_h = int(quality) if quality and quality.isdigit() else 1080
+    # Prevent 4K/2160p downloads from causing OOM crashes on cloud containers (512MB RAM limit)
+    if max_h > 1080:
+        logger.info(f"Capping ingestion resolution to 1080p (requested {max_h}p) for memory stability on cloud.")
+        max_h = 1080
 
     # Build format selector with clean fallbacks
     format_spec = (

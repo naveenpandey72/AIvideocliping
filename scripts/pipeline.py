@@ -44,7 +44,7 @@ def run_job(
     duration: Optional[float] = None,
     model_name: str = "tiny",
     force_pillarbox: bool = False,
-    quality: Optional[str] = "2160",
+    quality: Optional[str] = "1080",
     caption_style: str = "karaoke",
     credit: Optional[str] = None
 ) -> Path:
@@ -78,7 +78,9 @@ def run_job(
         ingest_cmd.extend(["--duration", str(duration)])
     if quality:
         ingest_cmd.extend(["--quality", str(quality)])
+    import gc
     run_step(ingest_cmd, "Step 1/4: Ingesting Media")
+    gc.collect()
 
     # 2. Transcribe
     transcribe_cmd = [
@@ -88,6 +90,7 @@ def run_job(
         "--model", model_name
     ]
     run_step(transcribe_cmd, "Step 2/4: Transcribing Audio with Word Timestamps")
+    gc.collect()
 
     # 3. Smart Crop to 1080x1920
     crop_cmd = [
@@ -98,6 +101,7 @@ def run_job(
     if force_pillarbox:
         crop_cmd.append("--pillarbox")
     run_step(crop_cmd, "Step 3/4: MediaPipe AI Face Tracking & 9:16 Cropping")
+    gc.collect()
 
     # 4. Render Captions
     caption_cmd = [
