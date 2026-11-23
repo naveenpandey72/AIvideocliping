@@ -20,6 +20,13 @@ import subprocess
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
+# Ensure project root and scripts dir are on sys.path regardless of execution context
+BASE_DIR = Path(__file__).resolve().parent.parent
+SCRIPTS_DIR = Path(__file__).resolve().parent
+for p in [str(BASE_DIR), str(SCRIPTS_DIR)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
 import pysubs2
 from pysubs2 import SSAFile, SSAEvent, SSAStyle, Color
 
@@ -176,7 +183,10 @@ def render_short_deliverable(
     temp_ass = final_output.parent / f"temp_{final_output.stem}.ass"
     try:
         if caption_style == "gta_popup":
-            from scripts.gta_clipper_engine import write_gta_popup_ass
+            try:
+                from scripts.gta_clipper_engine import write_gta_popup_ass
+            except ModuleNotFoundError:
+                from gta_clipper_engine import write_gta_popup_ass
             with open(transcript_json, "r", encoding="utf-8") as f:
                 tdata = json.load(f)
             flat_words = []

@@ -45,8 +45,8 @@ def detect_device_and_compute():
     logger.info("Using CPU execution with int8 quantization.")
     return "cpu", "int8"
 
-def extract_audio(video_path: Path, audio_wav_path: Path) -> Path:
-    """Extracts 16kHz mono PCM WAV from input media."""
+def extract_audio(video_path: Path, audio_wav_path: Path) -> bool:
+    """Extracts 16kHz mono PCM WAV from input media. Returns True if audio stream exists, False if missing/silent."""
     ffmpeg_cmd = ensure_ffmpeg()
     cmd = [
         ffmpeg_cmd, "-y", "-hide_banner", "-loglevel", "error",
@@ -54,8 +54,11 @@ def extract_audio(video_path: Path, audio_wav_path: Path) -> Path:
         "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
         str(audio_wav_path)
     ]
-    subprocess.run(cmd, check=True)
-    return audio_wav_path
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0 or not audio_wav_path.exists() or audio_wav_path.stat().st_size == 0:
+        logger.warning(f"No audio stream found in {video_path} or audio extraction had no output. Proceeding without audio.")
+        return False
+    return True
 
 def transcribe_media(
     input_media: Path,
@@ -71,12 +74,40 @@ def transcribe_media(
     temp_wav = output_json.parent / f"temp_{input_path.stem}.wav"
     try:
         logger.info(f"Extracting audio from {input_path}...")
-        extract_audio(input_path, temp_wav)
+        has_audio = extract_audio(input_path, temp_wav)
+        if not has_audio:
+            logger.info("Empty or missing audio stream. Writing empty transcript segments.")
+            empty_results = {
+                "language": "en",
+                "language_probability": 1.0,
+                "duration": 0.0,
+                "segments": []
+            }
+            with open(output_json, "w", encoding="utf-8") as f:
+                json.dump(empty_results, f, indent=2)
+            return empty_results
 
         device, compute_type = detect_device_and_compute()
         from faster_whisper import WhisperModel
         logger.info(f"Loading faster-whisper model '{model_name}' ({device}, {compute_type})...")
-        model = WhisperModel(model_name, device=device, compute_type=compute_type)
+        try:
+            model = WhisperModel(model_name, device=device, compute_type=compute_type)
+        except Exception as e:
+            logger.warning(f"Could not load requested model '{model_name}': {e}. Attempting fallback to local cached models...")
+            fallback_models = ["tiny", "base", "base.en"]
+            model = None
+            for fb in fallback_models:
+                if fb == model_name:
+                    continue
+                try:
+                    logger.info(f"Trying fallback model '{fb}'...")
+                    model = WhisperModel(fb, device=device, compute_type=compute_type, local_files_only=True)
+                    logger.info(f"Successfully loaded fallback model '{fb}'!")
+                    break
+                except Exception:
+                    continue
+            if model is None:
+                raise
 
         transcribe_kwargs = {
             "word_timestamps": True,

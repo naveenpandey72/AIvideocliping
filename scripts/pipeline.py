@@ -143,7 +143,9 @@ if __name__ == "__main__":
     parser.add_argument("--duration", type=float, help="Clip duration in seconds")
     parser.add_argument("--model", default="base", help="Whisper model (tiny, base, small)")
     parser.add_argument("--pillarbox", action="store_true", help="Force blurred pillarbox layout")
-    parser.add_argument("--quality", default="2160", help="Max quality height (e.g. 2160, 1080)")
+    parser.add_argument("--quality", default="1080", help="Max quality height (e.g. 1080, 720)")
+    parser.add_argument("--caption-style", default="karaoke", choices=["karaoke", "gta_popup"], help="Subtitle style")
+    parser.add_argument("--credit", help="Credit attribution text (e.g. @channel)")
     args = parser.parse_args()
 
     run_job(
@@ -154,5 +156,7 @@ if __name__ == "__main__":
         duration=args.duration,
         model_name=args.model,
         force_pillarbox=args.pillarbox,
-        quality=args.quality
+        quality=args.quality,
+        caption_style=args.caption_style,
+        credit=args.credit
     )

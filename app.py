@@ -148,6 +148,29 @@ def cleanup_stale_files():
 
 def fetch_video_metadata(url: str) -> Dict[str, Any]:
     """Inspects YouTube video with ultra-fast oEmbed fallback, title extraction, and dynamic qualities."""
+    # Check if URL is a local file
+    if os.path.exists(url):
+        local_p = Path(url).resolve()
+        title = local_p.stem.replace("_", " ").title()
+        duration_sec = 0
+        try:
+            import cv2
+            cap = cv2.VideoCapture(str(local_p))
+            if cap.isOpened():
+                fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+                frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+                duration_sec = int(frames / fps) if fps > 0 else 0
+                cap.release()
+        except Exception:
+            pass
+        return {
+            "title": title,
+            "duration": max(1, duration_sec),
+            "duration_formatted": f"{duration_sec // 60}:{duration_sec % 60:02d}",
+            "thumbnail": "",
+            "qualities": ["1080", "720"]
+        }
+
     video_id_match = re.search(r'(?:v=|\/|youtu\.be\/)([0-9A-Za-z_-]{11})', url)
     video_id = video_id_match.group(1) if video_id_match else None
 
@@ -277,6 +300,16 @@ PRESET_MOMENTS = [
 
 def calculate_clip_segments(total_duration: float, num_clips: int, url: str, video_title: str = "") -> List[Dict[str, Any]]:
     """Generates high-retention time windows using the Smart AI Viral Hook Detector."""
+    if total_duration <= 60:
+        return [{
+            "start": 0.0,
+            "end": round(max(1.0, total_duration), 1),
+            "title": f"Highlight from {video_title or 'Video'}",
+            "hook": "Watch this incredible highlight!",
+            "hashtags": ["#Shorts", "#Viral", "#FYP"],
+            "score": 98.0
+        }]
+
     if "M4f-4ucxtEU" in url:
         return PRESET_MOMENTS[:num_clips]
 
